@@ -1,29 +1,31 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
+import { NextResponse } from "next/server";
+import { getServerSession, type Session } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { connectDB } from "@/lib/db";
 import Lead from "@/models/Lead";
-import type { PipelineStage } from "mongoose";
+import { Types } from "mongoose";
 
-export async function GET(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session)
+type AppSession = Session & { userId?: string };
+
+export async function GET() {
+  const session = (await getServerSession(authOptions)) as AppSession | null;
+  if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
   await connectDB();
 
-  const userId = (session as any).userId as string;
+  const userId = session.userId;
+  if (!userId || !Types.ObjectId.isValid(userId)) {
+    return NextResponse.json({ error: "Invalid user" }, { status: 400 });
+  }
 
-  const pipeline: PipelineStage[] = [
-    {
-      $match: {
-        $expr: { $eq: [{ $toString: "$assigned_to" }, userId] },
-      } as any,
-    },
-    { $group: { _id: "$workingDay" } },
-    { $sort: { _id: -1 as 1 | -1 } },
-  ];
+  // Get all distinct workingDay values for leads assigned to this user
+  const days = await Lead.distinct<string>("workingDay", {
+    assigned_to: new Types.ObjectId(userId),
+  });
 
-  const rows = await Lead.aggregate(pipeline);
-  const days = rows.map((r) => r._id).filter(Boolean);
-  return NextResponse.json(days);
+  // Sort newest first (assuming YYYY-MM-DD strings)
+  days.sort((a, b) => b.localeCompare(a));
+
+  return NextResponse.json(days, { status: 200 });
 }

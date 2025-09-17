@@ -19,18 +19,20 @@ import {
 } from "lucide-react";
 import { toggleTodayDistribution } from "@/features/distribution/actions";
 
-// ---- Types from your server payloads ----
+/* ------------ Types from server payloads / session ------------ */
+
 type Company = {
   _id: string;
   name: string;
-  roleMode?: "uploader" | "receiver" | "hybrid"; // optional, if your companies API returns it
+  roleMode?: "uploader" | "receiver" | "hybrid";
   code?: string;
 };
+
 type Receiver = {
   _id: string;
   name: string;
   employeeId?: string;
-  role?: string; // "lead_operator"
+  role?: string;
   canReceiveLeads?: boolean;
   canUploadLeads?: boolean;
   lastReceivedAt?: string | null;
@@ -56,13 +58,40 @@ type TodayPayload = {
   };
   metrics: { pendingToday: number; assignedTodayByReceiver: AssignedRow[] };
   receivers: Receiver[];
-  companyMode?: "uploader" | "receiver" | "hybrid"; // server hint (preferred)
+  companyMode?: "uploader" | "receiver" | "hybrid";
 };
+
+type ErrorPayload = { error: string };
+
+const isErrorPayload = (v: unknown): v is ErrorPayload =>
+  typeof v === "object" && v !== null && "error" in v;
+
+type Membership = {
+  companyId?: string;
+  role?:
+    | "superadmin"
+    | "admin"
+    | "lead_operator"
+    | "fb_submitter"
+    | "fb_analytics_viewer"
+    | "employee"
+    | string;
+  can_distribute_leads?: boolean;
+  roleMode?: "uploader" | "receiver" | "hybrid";
+};
+
+type AppSession = {
+  role?: string;
+  memberships?: Membership[];
+};
+
+/* ------------ Component ------------ */
 
 export default function DistributionAdminPage() {
   const router = useRouter();
   const params = useSearchParams();
-  const { data: session } = useSession();
+  const { data } = useSession();
+  const session = (data ?? {}) as AppSession;
 
   const [loading, setLoading] = useState(true);
   const [fetching, setFetching] = useState(false);
@@ -83,26 +112,14 @@ export default function DistributionAdminPage() {
     "uploader" | "receiver" | "hybrid" | null
   >(null);
 
-  // filters + selection
+  // filters
   const [q, setQ] = useState("");
   const [onlyEligible, setOnlyEligible] = useState(false);
-  const [selection, setSelection] = useState<Record<string, boolean>>({});
 
-  // ---- Role / permission (UI hints) ----
-  const myRoleForCompany = useMemo(() => {
-    const user: any = session?.user || null;
-    const memberships: any[] = user?.memberships || [];
-    if (!companyId || !memberships?.length) return null;
-    const m = memberships.find(
-      (mm) => String(mm.companyId) === String(companyId)
-    );
-    return m?.role || null;
-  }, [session, companyId]);
-
+  // ---- Permission (UI hints) ----
   const canToggleForCompany = useMemo(() => {
-    const user: any = session?.user || null;
-    const memberships: any[] = user?.memberships || [];
-    if (!companyId || !memberships?.length) return true; // optimistic fallback
+    const memberships = session.memberships ?? [];
+    if (!companyId || memberships.length === 0) return true; // optimistic fallback
     const m = memberships.find(
       (mm) => String(mm.companyId) === String(companyId)
     );
@@ -112,21 +129,19 @@ export default function DistributionAdminPage() {
     );
   }, [session, companyId]);
 
-  // ---- Effective company mode (priority: server -> session -> local inference) ----
+  // ---- Effective company mode (priority: server -> session -> list -> infer) ----
   const sessionRoleModeForSelected = useMemo<
     "uploader" | "receiver" | "hybrid" | undefined
   >(() => {
-    const user: any = session?.user || null;
-    const memberships: any[] = user?.memberships || [];
-    if (!companyId || !memberships?.length) return undefined;
+    const memberships = session.memberships ?? [];
+    if (!companyId || memberships.length === 0) return undefined;
     const m = memberships.find(
       (mm) => String(mm.companyId) === String(companyId)
     );
-    return m?.roleMode as any; // this was added in your auth upgrade
+    return m?.roleMode;
   }, [session, companyId]);
 
   const localInferredMode: "uploader" | "receiver" = useMemo(() => {
-    // be conservative: default to receiver to avoid false locks
     if (!receivers.length) return "receiver";
     const anyUpload = receivers.some((r) => r.canUploadLeads);
     const anyReceive = receivers.some((r) => r.canReceiveLeads);
@@ -137,16 +152,12 @@ export default function DistributionAdminPage() {
   const effectiveCompanyMode = useMemo<
     "uploader" | "receiver" | "hybrid"
   >(() => {
-    // 1) server response for the selected company
     if (serverCompanyMode) return serverCompanyMode;
-    // 2) session membership for the selected company
     if (sessionRoleModeForSelected) return sessionRoleModeForSelected;
-    // 3) companies list (if your /companies API returns roleMode)
     const fromList = companies.find(
       (c) => String(c._id) === String(companyId)
     )?.roleMode;
     if (fromList) return fromList;
-    // 4) last resort: gentle local inference (defaults to receiver)
     return localInferredMode;
   }, [
     serverCompanyMode,
@@ -162,9 +173,7 @@ export default function DistributionAdminPage() {
   async function loadCompanies() {
     const res = await fetch(
       "/api/admin/companies?active=1&need=distribute&scope=memberships",
-      {
-        cache: "no-store",
-      }
+      { cache: "no-store" }
     );
     if (!res.ok) throw new Error("Failed to load companies");
     const data = (await res.json()) as Company[];
@@ -180,25 +189,27 @@ export default function DistributionAdminPage() {
         `/api/admin/distribution/today?companyId=${encodeURIComponent(
           companyId
         )}`,
-        {
-          cache: "no-store",
-        }
+        { cache: "no-store" }
       );
-      const data: TodayPayload = await res.json();
-      if (!res.ok) throw new Error((data as any)?.error || "Failed to load");
+      const payload = (await res.json()) as TodayPayload | ErrorPayload;
+      if (!res.ok) {
+        const msg = isErrorPayload(payload) ? payload.error : "Failed to load";
+        throw new Error(msg);
+      }
 
+      const data = payload as TodayPayload;
       setWorkingDay(data.workingDay);
       setIsActive(Boolean(data.switch?.isActive));
       setActivatedAt(data.switch?.activatedAt || null);
       setPendingToday(Number(data.metrics?.pendingToday || 0));
       setAssignedRows(data.metrics?.assignedTodayByReceiver || []);
-      setReceivers((data.receivers || []) as Receiver[]);
+      setReceivers(Array.isArray(data.receivers) ? data.receivers : []);
       setServerCompanyMode(data.companyMode ?? null);
 
       setError(null);
-      setSelection({});
-    } catch (e: any) {
-      setError(e?.message || "Failed to load");
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Failed to load";
+      setError(msg);
     } finally {
       setFetching(false);
     }
@@ -225,7 +236,7 @@ export default function DistributionAdminPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companyId]);
 
-  // 🔁 Optional: auto-refresh while active (skip if restricted)
+  // 🔁 Optional auto-refresh while active (skip if restricted)
   useEffect(() => {
     if (!isActive || !companyId || pageRestricted) return;
     const t = setInterval(() => refetch(), 8000);
@@ -308,14 +319,12 @@ export default function DistributionAdminPage() {
       } else {
         toast.success(`Distribution paused for ${res.workingDay}.`);
       }
-    } catch (e: any) {
+    } catch (e: unknown) {
       setIsActive(!target);
-      toast.error(e?.message || "Toggle failed");
+      const msg = e instanceof Error ? e.message : "Toggle failed";
+      toast.error(msg);
     }
   };
-
-  const toggleSelect = (id: string) =>
-    setSelection((s) => ({ ...s, [id]: !s[id] }));
 
   // PATCH single membership field (optimistic)
   const updateReceiver = async (id: string, patch: Partial<Receiver>) => {
@@ -337,63 +346,16 @@ export default function DistributionAdminPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...patch, companyId }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error((data as any)?.error || "Update failed");
+      const payload = (await res.json()) as { ok?: boolean } | ErrorPayload;
+      if (!res.ok) {
+        const msg = isErrorPayload(payload) ? payload.error : "Update failed";
+        throw new Error(msg);
+      }
       toast.success("Saved");
-    } catch (e: any) {
+    } catch (e: unknown) {
       setReceivers(prev); // revert
-      toast.error(e?.message || "Save failed");
-    }
-  };
-
-  // BULK enable/disable on the correct flag
-  const bulkSetEligible = async (enable: boolean) => {
-    if (!canToggleForCompany) {
-      toast.error("Permission denied");
-      return;
-    }
-    if (pageRestricted) {
-      toast.error("This company is in uploader mode. Edits are disabled.");
-      return;
-    }
-    const ids = Object.entries(selection)
-      .filter(([, v]) => v)
-      .map(([k]) => k);
-    if (!ids.length) {
-      toast("Select at least one receiver");
-      return;
-    }
-
-    // optimistic
-    const prev = receivers;
-    setReceivers((list) =>
-      list.map((r) =>
-        ids.includes(r._id)
-          ? effectiveCompanyMode === "uploader"
-            ? { ...r, canUploadLeads: enable }
-            : { ...r, canReceiveLeads: enable }
-          : r
-      )
-    );
-
-    try {
-      const body =
-        effectiveCompanyMode === "uploader"
-          ? { ids, canUploadLeads: enable, companyId }
-          : { ids, canReceiveLeads: enable, companyId };
-
-      const res = await fetch(`/api/admin/receivers/bulk`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (!res.ok)
-        throw new Error((data as any)?.error || "Bulk update failed");
-      toast.success(`Bulk ${enable ? "enabled" : "disabled"}`);
-    } catch (e: any) {
-      setReceivers(prev); // revert
-      toast.error(e?.message || "Bulk update failed");
+      const msg = e instanceof Error ? e.message : "Save failed";
+      toast.error(msg);
     }
   };
 
@@ -403,7 +365,7 @@ export default function DistributionAdminPage() {
   if (pageRestricted) {
     return (
       <div className="p-6 md:p-8">
-        {/* Header with company switcher so admins can switch to a receiver/hybrid company */}
+        {/* Header with company switcher */}
         <header className="mb-6">
           <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div>
@@ -470,8 +432,8 @@ export default function DistributionAdminPage() {
               <p className="mt-1 text-sm text-amber-800 dark:text-amber-200">
                 The active company is configured as <b>Uploader</b>.
                 Auto-distribution controls and receiver eligibility are not
-                available for uploader-mode companies. Switch to a company in{" "}
-                <b>Receiver</b> or <b>Hybrid</b> mode to manage distribution.
+                available. Switch to a company in <b>Receiver</b> or{" "}
+                <b>Hybrid</b> mode to manage distribution.
               </p>
             </div>
           </div>
@@ -483,8 +445,6 @@ export default function DistributionAdminPage() {
   // ---------------------
   // NORMAL VIEW (receiver/hybrid)
   // ---------------------
-
-  const isUploader = effectiveCompanyMode === "uploader"; // will be false here, but keep variable for clarity
 
   return (
     <div className="p-6 md:p-8">

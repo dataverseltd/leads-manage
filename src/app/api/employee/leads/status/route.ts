@@ -1,20 +1,28 @@
-// apps/web/src/app/api/employee/leads/status/route.ts
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
+import { getServerSession, type Session } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { connectDB } from "@/lib/db";
-import Lead from "@/models/Lead"; // adjust import path
+import Lead from "@/models/Lead";
+
+type AppSession = Session & { userId?: string };
+type PutBody = { id?: string; status?: string };
 
 export async function PUT(req: Request) {
-  const session = await getServerSession(authOptions);
+  const session = (await getServerSession(authOptions)) as AppSession | null;
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const body = await req.json().catch(() => null);
-  if (!body?.id || !body?.status) {
+  let body: PutBody;
+  try {
+    body = (await req.json()) as PutBody;
+  } catch {
+    body = {};
+  }
+
+  if (!body.id || !body.status) {
     return NextResponse.json({ error: "Missing id/status" }, { status: 400 });
   }
 
@@ -26,8 +34,8 @@ export async function PUT(req: Request) {
       return NextResponse.json({ error: "Lead not found" }, { status: 404 });
     }
 
-    // (optional) safety check: only allow status update if this user is assigned
-    if (String(lead.assigned_to) !== String((session as any).userId)) {
+    // Only allow if this user is assigned
+    if (String(lead.assigned_to) !== String(session.userId)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -39,8 +47,9 @@ export async function PUT(req: Request) {
       id: lead._id,
       status: lead.lead_status,
     });
-  } catch (e: any) {
+  } catch (e: unknown) {
     console.error("Lead status update error:", e);
-    return NextResponse.json({ error: "Server error" }, { status: 500 });
+    const message = e instanceof Error ? e.message : "Server error";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

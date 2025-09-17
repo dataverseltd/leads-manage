@@ -2,19 +2,38 @@
 export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
+import { getServerSession, type Session } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { connectDB } from "@/lib/db";
-import mongoose from "mongoose";
+import mongoose, { Types } from "mongoose";
 import Screenshot from "@/models/Screenshot";
 
-const ok = (data: any, status = 200) => NextResponse.json(data, { status });
+type AppSession = Session & {
+  userId?: string;
+  activeCompanyId?: string;
+};
+
+type TotalsRow = {
+  total: number;
+  distinctLeads: number;
+};
+
+type PerProductRow = {
+  product: string;
+  count: number;
+  distinctLeads: number;
+  firstUploadAt: Date | null;
+  lastUploadAt: Date | null;
+  recentUrls: string[];
+};
+
+const ok = <T>(data: T, status = 200) => NextResponse.json(data, { status });
 const err = (message: string, status = 400) =>
   NextResponse.json({ error: message }, { status });
 
 export async function GET(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = (await getServerSession(authOptions)) as AppSession | null;
     if (!session?.user) return err("Unauthorized", 401);
 
     const url = new URL(req.url);
@@ -26,25 +45,28 @@ export async function GET(req: NextRequest) {
 
     await connectDB();
 
-    const userId = (session as any)?.userId as string | undefined;
+    const userId = session.userId;
     if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
       return err("Invalid user", 401);
     }
 
-    const match: any = {
+    // Build match object (typed, no `any`)
+    const match: {
+      uploadedBy: Types.ObjectId;
+      workingDay: string;
+      companyId?: Types.ObjectId;
+    } = {
       uploadedBy: new mongoose.Types.ObjectId(userId),
       workingDay,
     };
 
-    const activeCompanyId = (session as any)?.activeCompanyId as
-      | string
-      | undefined;
+    const activeCompanyId = session.activeCompanyId;
     if (activeCompanyId && mongoose.Types.ObjectId.isValid(activeCompanyId)) {
       match.companyId = new mongoose.Types.ObjectId(activeCompanyId);
     }
 
     // One pass for totals
-    const [totals] = await Screenshot.aggregate([
+    const totalsArr = (await Screenshot.aggregate([
       { $match: match },
       {
         $group: {
@@ -60,10 +82,12 @@ export async function GET(req: NextRequest) {
           distinctLeads: { $size: "$distinctLeads" },
         },
       },
-    ]);
+    ])) as TotalsRow[];
+
+    const totals: TotalsRow | undefined = totalsArr[0];
 
     // Detailed per-product breakdown
-    const perProduct = await Screenshot.aggregate([
+    const perProduct = (await Screenshot.aggregate([
       { $match: match },
       {
         $addFields: {
@@ -79,7 +103,7 @@ export async function GET(req: NextRequest) {
           distinctLeads: { $addToSet: "$lead" },
           firstUploadAt: { $min: "$uploadedAt" },
           lastUploadAt: { $max: "$uploadedAt" },
-          urls: { $push: "$url" }, // we'll slice recent below
+          urls: { $push: "$url" },
         },
       },
       {
@@ -91,25 +115,21 @@ export async function GET(req: NextRequest) {
           firstUploadAt: 1,
           lastUploadAt: 1,
           recentUrls: {
-            $slice: [
-              {
-                $reverseArray: "$urls",
-              },
-              3,
-            ],
+            $slice: [{ $reverseArray: "$urls" }, 3],
           },
         },
       },
       { $sort: { count: -1, product: 1 } },
-    ]);
+    ])) as PerProductRow[];
 
     return ok({
       workingDay,
-      total: totals?.total || 0,
-      distinctLeads: totals?.distinctLeads || 0,
+      total: totals?.total ?? 0,
+      distinctLeads: totals?.distinctLeads ?? 0,
       items: perProduct, // [{ product, count, distinctLeads, firstUploadAt, lastUploadAt, recentUrls }]
     });
-  } catch (e: any) {
-    return err(e?.message || "Server error", 500);
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : "Server error";
+    return err(message, 500);
   }
 }

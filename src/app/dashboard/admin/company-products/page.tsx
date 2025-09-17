@@ -16,6 +16,8 @@ import {
   Copy,
 } from "lucide-react";
 
+/* ------------ Types ------------ */
+
 type Company = {
   _id: string;
   name: string;
@@ -31,8 +33,50 @@ type Product = {
   active?: boolean;
 };
 
+type Membership = {
+  companyId?: string;
+  role?:
+    | "superadmin"
+    | "admin"
+    | "lead_operator"
+    | "fb_submitter"
+    | "fb_analytics_viewer"
+    | "employee"
+    | string;
+  can_manage_products?: boolean;
+};
+
+type AppSession = {
+  role?: string;
+  memberships?: Membership[];
+  user?: unknown; // we won’t rely on nested user for role/caps
+};
+
+type ProductsResponse =
+  | {
+      month: string;
+      products: Product[];
+      fallback?: undefined;
+    }
+  | {
+      month: string;
+      products: Product[];
+      fallback: { month: string; products: Product[] };
+    }
+  | { error: string };
+
+const isErrorPayload = (v: unknown): v is { error: string } =>
+  typeof v === "object" &&
+  v !== null &&
+  "error" in v &&
+  typeof (v as { error?: unknown }).error === "string";
+
+const productsFrom = (v: ProductsResponse): Product[] =>
+  "products" in v && Array.isArray(v.products) ? v.products : [];
+
+/* ------------ Helpers ------------ */
+
 function getWorkingMonthBD(date = new Date()): string {
-  // Quick BDT (+06:00) conversion
   const utc = date.getTime() + date.getTimezoneOffset() * 60000;
   const bdt = new Date(utc + 6 * 60 * 60000);
   const y = bdt.getFullYear();
@@ -68,8 +112,12 @@ function SkeletonInput() {
   );
 }
 
+/* ------------ Component ------------ */
+
 export default function CompanyProductsPage() {
-  const { data: session } = useSession();
+  const { data } = useSession();
+  const session = (data ?? {}) as AppSession;
+
   const router = useRouter();
   const params = useSearchParams();
 
@@ -78,7 +126,6 @@ export default function CompanyProductsPage() {
     params.get("companyId") || ""
   );
 
-  // CHANGED: products now objects with IDs
   const [products, setProducts] = useState<Product[]>([]);
 
   const [input, setInput] = useState("");
@@ -91,7 +138,6 @@ export default function CompanyProductsPage() {
   );
   const months = useMemo(getLast12Months, []);
 
-  // CHANGED: fallbackInfo products are Product[]
   const [fallbackInfo, setFallbackInfo] = useState<{
     month: string;
     products: Product[];
@@ -103,9 +149,8 @@ export default function CompanyProductsPage() {
   );
 
   const isGlobalSuper = useMemo(() => {
-    const user: any = session?.user || {};
-    const globalRole = (session as any)?.role || user?.role;
-    const memberships: any[] = user?.memberships || [];
+    const globalRole = session.role;
+    const memberships = session.memberships ?? [];
     return (
       globalRole === "superadmin" ||
       memberships.some((m) => m?.role === "superadmin")
@@ -115,25 +160,20 @@ export default function CompanyProductsPage() {
   const isUploaderCompany = currentCompany?.roleMode === "uploader";
 
   const canEdit = useMemo(() => {
-    if (isUploaderCompany) return false; // hard lock for uploader-only companies
-    const user: any = session?.user || {};
-    const memberships: any[] = user?.memberships || [];
+    if (isUploaderCompany) return false;
+    const memberships = session.memberships ?? [];
     if (!companyId) return false;
     if (isGlobalSuper) return true;
     const m = memberships.find(
       (mm) => String(mm.companyId) === String(companyId)
     );
     return !!m && (m.role === "admin" || !!m?.can_manage_products);
-  }, [session, companyId, isGlobalSuper, isUploaderCompany, currentCompany]);
+  }, [session, companyId, isGlobalSuper, isUploaderCompany]);
 
   async function loadCompanies() {
-    // Superadmin should see all active companies (no scope restriction)
-    const user: any = session?.user || {};
-    const globalRole = (session as any)?.role || user?.role;
-    const memberships: any[] = user?.memberships || [];
     const isSuper =
-      globalRole === "superadmin" ||
-      memberships.some((m: any) => m?.role === "superadmin");
+      session.role === "superadmin" ||
+      (session.memberships ?? []).some((m) => m?.role === "superadmin");
 
     const qs = new URLSearchParams({ active: "1" });
     if (!isSuper) qs.set("scope", "memberships");
@@ -144,7 +184,7 @@ export default function CompanyProductsPage() {
     if (!res.ok) throw new Error("Failed to load companies");
     const data = (await res.json()) as Company[];
     setCompanies(data);
-    // initialize companyId if missing
+
     if (!companyId && data.length) {
       setCompanyId(data[0]._id);
       const sp = new URLSearchParams(Array.from(params.entries()));
@@ -164,23 +204,21 @@ export default function CompanyProductsPage() {
         )}/monthly-products?month=${encodeURIComponent(forMonth)}`,
         { cache: "no-store" }
       );
-      const data = await res.json();
-      if (!res.ok) throw new Error((data as any)?.error || "Failed to load");
+      const data = (await res.json()) as ProductsResponse;
+      if (!res.ok) {
+        const msg = isErrorPayload(data) ? data.error : "Failed to load";
+        throw new Error(msg);
+      }
 
-      // CHANGED: accept Product[]
-      setProducts(
-        Array.isArray(data.products) ? (data.products as Product[]) : []
-      );
+      setProducts(productsFrom(data));
       setFallbackInfo(
-        data.fallback
-          ? ({
-              month: data.fallback.month,
-              products: data.fallback.products as Product[],
-            } as const)
+        "fallback" in data && data.fallback
+          ? { month: data.fallback.month, products: data.fallback.products }
           : null
       );
-    } catch (e: any) {
-      toast.error(e?.message || "Failed to load products");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Failed to load products";
+      toast.error(msg);
     } finally {
       setFetching(false);
     }
@@ -212,7 +250,6 @@ export default function CompanyProductsPage() {
     if (!name) return;
     setInput("");
 
-    // Optimistic: add a temp chip (optional)
     const tempId = `temp-${Date.now()}`;
     setProducts((prev) =>
       prev.some((p) => p.name === name)
@@ -231,23 +268,24 @@ export default function CompanyProductsPage() {
           body: JSON.stringify({ name }),
         }
       );
-      const data = await res.json();
-      if (!res.ok) throw new Error((data as any)?.error || "Add failed");
+      const data = (await res.json()) as ProductsResponse;
+      if (!res.ok) {
+        const msg = isErrorPayload(data) ? data.error : "Add failed";
+        throw new Error(msg);
+      }
 
-      // Server returns authoritative list with real IDs
-      setProducts((data.products || []) as Product[]);
+      setProducts(productsFrom(data));
       toast.success("Product added");
-    } catch (e: any) {
-      // Rollback temp
+    } catch (e) {
       setProducts((p) => p.filter((x) => x._id !== tempId));
-      toast.error(e?.message || "Add failed");
+      const msg = e instanceof Error ? e.message : "Add failed";
+      toast.error(msg);
     }
   };
 
-  // CHANGED: remove by id
   const removeOne = async (id: string) => {
     const prev = products;
-    setProducts((p) => p.filter((x) => x._id !== id)); // optimistic
+    setProducts((p) => p.filter((x) => x._id !== id));
     try {
       const res = await fetch(
         `/api/admin/companies/${encodeURIComponent(
@@ -259,17 +297,20 @@ export default function CompanyProductsPage() {
           body: JSON.stringify({ id }),
         }
       );
-      const data = await res.json();
-      if (!res.ok) throw new Error((data as any)?.error || "Remove failed");
-      setProducts((data.products || []) as Product[]);
+      const data = (await res.json()) as ProductsResponse;
+      if (!res.ok) {
+        const msg = isErrorPayload(data) ? data.error : "Remove failed";
+        throw new Error(msg);
+      }
+      setProducts(productsFrom(data));
       toast.success("Removed");
-    } catch (e: any) {
-      setProducts(prev); // rollback
-      toast.error(e?.message || "Remove failed");
+    } catch (e) {
+      setProducts(prev);
+      const msg = e instanceof Error ? e.message : "Remove failed";
+      toast.error(msg);
     }
   };
 
-  // CHANGED: bulk still submits names, server returns Product[]
   const bulkReplace = async () => {
     const lines = bulk
       .split(/\r?\n/)
@@ -280,7 +321,6 @@ export default function CompanyProductsPage() {
       return;
     }
     const prev = products;
-    // Optional optimistic: show as temp without IDs
     setProducts(
       lines.map((n, i) => ({ _id: `temp-${i}-${Date.now()}`, name: n }))
     );
@@ -295,13 +335,17 @@ export default function CompanyProductsPage() {
           body: JSON.stringify({ products: lines }),
         }
       );
-      const data = await res.json();
-      if (!res.ok) throw new Error((data as any)?.error || "Save failed");
-      setProducts((data.products || []) as Product[]);
+      const data = (await res.json()) as ProductsResponse;
+      if (!res.ok) {
+        const msg = isErrorPayload(data) ? data.error : "Save failed";
+        throw new Error(msg);
+      }
+      setProducts(productsFrom(data));
       toast.success("Saved");
-    } catch (e: any) {
-      setProducts(prev); // rollback
-      toast.error(e?.message || "Save failed");
+    } catch (e) {
+      setProducts(prev);
+      const msg = e instanceof Error ? e.message : "Save failed";
+      toast.error(msg);
     }
   };
 
@@ -316,15 +360,17 @@ export default function CompanyProductsPage() {
         )}&from=${encodeURIComponent(fallbackInfo.month)}`,
         { method: "POST" }
       );
-      const data = await res.json();
-      if (!res.ok) throw new Error((data as any)?.error || "Clone failed");
-      setProducts(
-        Array.isArray(data.products) ? (data.products as Product[]) : []
-      );
+      const data = (await res.json()) as ProductsResponse;
+      if (!res.ok) {
+        const msg = isErrorPayload(data) ? data.error : "Clone failed";
+        throw new Error(msg);
+      }
+      setProducts(productsFrom(data));
       setFallbackInfo(null);
       toast.success(`Copied ${fallbackInfo.month} → ${month}`);
-    } catch (e: any) {
-      toast.error(e?.message || "Clone failed");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Clone failed";
+      toast.error(msg);
     }
   };
 
@@ -563,7 +609,7 @@ export default function CompanyProductsPage() {
               Save Bulk
             </button>
             <button
-              onClick={() => setBulk(products.map((p) => p.name).join("\n"))} // CHANGED
+              onClick={() => setBulk(products.map((p) => p.name).join("\n"))}
               className="inline-flex items-center gap-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 text-sm text-gray-800 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-800"
             >
               <Download className="h-4 w-4" />
@@ -573,7 +619,6 @@ export default function CompanyProductsPage() {
         </div>
       </div>
 
-      {/* Subtle bottom skeleton bar while fetching */}
       {fetching && (
         <div className="mt-6 h-2 w-full animate-pulse rounded bg-gray-200/70 dark:bg-gray-800/70" />
       )}

@@ -9,14 +9,32 @@ import {
 } from "@/app/api/admin/distribution/_utils";
 
 const SERVER_API = process.env.SERVER_API_URL || "http://127.0.0.1:4000";
+
+type JsonObject = Record<string, unknown>;
+
+function isPlainObject(v: unknown): v is JsonObject {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+function readCompanyId(body: JsonObject): string | undefined {
+  const v = body["companyId"];
+  return typeof v === "string" && v.trim() ? v : undefined;
+}
+
 export async function PATCH(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
   const qsCompanyId = getCompanyIdFromReq(req); // from ?companyId or header
-  const origBody = await req.json().catch(() => ({} as any));
 
-  const effectiveCompanyId = qsCompanyId || origBody.companyId; // fall back to body
+  let bodyUnknown: unknown;
+  try {
+    bodyUnknown = await req.json();
+  } catch {
+    bodyUnknown = {};
+  }
+  const origBody: JsonObject = isPlainObject(bodyUnknown) ? bodyUnknown : {};
+
+  const effectiveCompanyId = qsCompanyId ?? readCompanyId(origBody); // fall back to body
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -31,11 +49,14 @@ export async function PATCH(
   ) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
-  if (userDoc.currentSessionToken)
-    headers["x-session-token"] = String(userDoc.currentSessionToken);
+
+  // Optional session token if present on your user model
+  const maybeToken = (userDoc as unknown as { currentSessionToken?: string })
+    ?.currentSessionToken;
+  if (maybeToken) headers["x-session-token"] = String(maybeToken);
 
   // only include companyId if we have one
-  const payload = effectiveCompanyId
+  const payload: JsonObject = effectiveCompanyId
     ? { ...origBody, companyId: effectiveCompanyId }
     : origBody;
 

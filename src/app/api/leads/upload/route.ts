@@ -32,8 +32,12 @@ export async function POST(req: NextRequest) {
     "Content-Type": "application/json",
   };
   if (companyId) headers["x-company-id"] = companyId;
-  if (userDoc.currentSessionToken) {
-    headers["x-session-token"] = String(userDoc.currentSessionToken);
+  if (
+    (userDoc as { currentSessionToken?: string } | null)?.currentSessionToken
+  ) {
+    headers["x-session-token"] = String(
+      (userDoc as { currentSessionToken?: string }).currentSessionToken
+    );
   }
 
   const upstream = await fetch(`${SERVER_API}/api/leads/upload`, {
@@ -45,13 +49,18 @@ export async function POST(req: NextRequest) {
 
   const contentType = upstream.headers.get("content-type") || "";
   const text = await upstream.text();
-  let data: any = text;
-  try {
-    data = contentType.includes("application/json")
-      ? JSON.parse(text)
-      : { note: text };
-  } catch {
+
+  let data: unknown;
+  if (contentType.includes("application/json")) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      // Upstream said JSON but sent invalid payload; return a clear wrapper
+      data = { error: "Invalid JSON from upstream", raw: text || null };
+    }
+  } else {
     data = { note: text || null };
   }
+
   return NextResponse.json(data, { status: upstream.status });
 }

@@ -1,10 +1,14 @@
-export type ToggleResponse = {
+// ./src/features/distribution/actions.ts
+export type ToggleResponseBase = {
   ok?: boolean;
   switched?: "on" | "off";
   drained?: number;
   workingDay?: string;
-  [key: string]: any;
+  error?: string;
 };
+
+// Allow extra server fields, but type them safely:
+export type ToggleResponse = ToggleResponseBase & Record<string, unknown>;
 
 export async function toggleTodayDistribution(
   active: boolean,
@@ -18,13 +22,24 @@ export async function toggleTodayDistribution(
     body: JSON.stringify({ active }), // server expects { active }
   });
 
-  let data: any = {};
+  let data: unknown;
   try {
     data = await res.json();
-  } catch {}
+  } catch {
+    data = undefined;
+  }
 
   if (!res.ok) {
-    throw new Error(data?.error || "Failed to toggle distribution");
+    const msg =
+      (data && typeof data === "object" && "error" in data
+        ? (data as { error?: string }).error
+        : undefined) || "Failed to toggle distribution";
+    throw new Error(msg);
   }
-  return data as ToggleResponse;
+
+  // If the parsed JSON isn't an object, coerce to a minimal shape
+  const obj =
+    data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+
+  return obj as ToggleResponse;
 }

@@ -1,44 +1,80 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
+import { getServerSession, type Session } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { connectDB } from "@/lib/db";
 import Lead from "@/models/Lead";
 import Screenshot from "@/models/Screenshot";
+import { Types, type FilterQuery } from "mongoose";
 
 export const runtime = "nodejs";
 
-export async function GET(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session)
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+type AppSession = Session & {
+  userId?: string;
+  role?: string;
+  caps?: {
+    canReceiveLeads?: boolean;
+    [k: string]: unknown;
+  };
+};
 
-  const userId = (session as any).userId as string;
-  const caps = (session as any).caps || {};
-  if (
-    !userId ||
-    (!caps.canReceiveLeads && (session as any).role === "fb_submitter")
-  ) {
+type LeadStatus = "assigned" | "approved" | "rejected";
+
+type LeadLean = {
+  _id: Types.ObjectId;
+  client_name?: string;
+  number?: string;
+  fb_id_name?: string;
+  lead_status?: LeadStatus | "pending" | "in_progress" | "done";
+  workingDay?: string;
+  rent?: string;
+  house_apt?: string;
+  house_apt_details?: string;
+  address?: string;
+  post_link?: string;
+  assigned_to?: Types.ObjectId | null;
+  createdAt?: Date | string;
+};
+
+export async function GET(req: NextRequest) {
+  const session = (await getServerSession(authOptions)) as AppSession | null;
+  if (!session?.user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const userId = session.userId;
+  const role = session.role;
+  const caps = session.caps ?? {};
+
+  if (!userId) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+  if (!caps.canReceiveLeads && role === "fb_submitter") {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   await connectDB();
 
   const url = new URL(req.url);
-  const page = Math.max(parseInt(url.searchParams.get("page") || "1"), 1);
+  const page = Math.max(parseInt(url.searchParams.get("page") || "1", 10), 1);
   const limit = Math.min(
-    Math.max(parseInt(url.searchParams.get("limit") || "30"), 10),
+    Math.max(parseInt(url.searchParams.get("limit") || "30", 10), 10),
     100
   );
   const workingDay = (url.searchParams.get("workingDay") || "").trim();
   const q = (url.searchParams.get("q") || "").trim();
-  const status = url.searchParams.get("status") as
-    | "assigned"
-    | "approved"
-    | "rejected"
-    | ""
-    | null;
+  const statusParam = url.searchParams.get("status");
+  const status: LeadStatus | "" | null =
+    statusParam === "assigned" ||
+    statusParam === "approved" ||
+    statusParam === "rejected"
+      ? statusParam
+      : statusParam === "" || statusParam === null
+      ? (statusParam as "" | null)
+      : null;
 
-  const filter: any = {
+  // Build filter (match assigned_to directly using ObjectId)
+  const filter: FilterQuery<LeadLean> = {
+    assigned_to: new Types.ObjectId(userId),
     ...(workingDay ? { workingDay } : {}),
     ...(status ? { lead_status: status } : {}),
     ...(q
@@ -51,7 +87,6 @@ export async function GET(req: NextRequest) {
           ],
         }
       : {}),
-    $expr: { $eq: [{ $toString: "$assigned_to" }, userId] },
   };
 
   // Fetch limit+1 to detect hasMore (avoid countDocuments)
@@ -62,7 +97,7 @@ export async function GET(req: NextRequest) {
     .sort({ createdAt: -1 })
     .skip((page - 1) * limit)
     .limit(limit + 1)
-    .lean();
+    .lean<LeadLean[]>();
 
   const items = docs.slice(0, limit);
   const hasMore = docs.length > limit;
@@ -70,14 +105,13 @@ export async function GET(req: NextRequest) {
   // Per-page screenshot counts only for these items
   let byLeadShotCount: Record<string, number> = {};
   if (items.length) {
-    const ids = items.map((x: any) => x._id);
-    const agg = await Screenshot.aggregate([
+    const ids = items.map((x) => x._id);
+    const agg = (await Screenshot.aggregate([
       { $match: { lead: { $in: ids } } },
       { $group: { _id: "$lead", c: { $sum: 1 } } },
-    ]);
-    byLeadShotCount = Object.fromEntries(
-      agg.map((r: any) => [String(r._id), r.c])
-    );
+    ])) as Array<{ _id: Types.ObjectId; c: number }>;
+
+    byLeadShotCount = Object.fromEntries(agg.map((r) => [String(r._id), r.c]));
   }
 
   return NextResponse.json({ items, hasMore, byLeadShotCount });

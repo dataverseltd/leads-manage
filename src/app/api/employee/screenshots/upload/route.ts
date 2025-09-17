@@ -1,28 +1,42 @@
 export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
+import { getServerSession, type Session } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { connectDB } from "@/lib/db";
-import mongoose from "mongoose";
+import mongoose, { Types } from "mongoose";
 import Screenshot from "@/models/Screenshot";
 import CompanyMonthlyProduct from "@/models/CompanyMonthlyProduct";
 import Lead from "@/models/Lead";
-type CompanyMonthlyProductLean = {
-  _id: mongoose.Types.ObjectId;
+
+type AppSession = Session & { userId?: string };
+
+type LeadLean = {
+  _id: Types.ObjectId;
+  assignedCompanyId?: Types.ObjectId | string | null;
+};
+
+type ProductLean = {
+  _id: Types.ObjectId;
   name: string;
   month: string; // "YYYY-MM"
-  companyId: mongoose.Types.ObjectId;
-  active: boolean;
+  companyId: Types.ObjectId;
+  active?: boolean;
 };
-const ok = (data: any, status = 200) => NextResponse.json(data, { status });
+
+type PostBody = {
+  leadId?: string;
+  url?: string;
+  productId?: string;
+  workingDay?: string;
+};
+
+const ok = <T>(data: T, status = 200) => NextResponse.json(data, { status });
 const err = (message: string, status = 400) =>
   NextResponse.json({ error: message }, { status });
 
-const isObjectId = (v: unknown): v is string =>
+const isObjectIdString = (v: unknown): v is string =>
   typeof v === "string" && mongoose.Types.ObjectId.isValid(v);
-
-const monthFromDay = (workingDay: string) => workingDay.slice(0, 7); // "YYYY-MM-DD" -> "YYYY-MM"
 
 /**
  * POST /api/employee/screenshots/upload
@@ -30,14 +44,19 @@ const monthFromDay = (workingDay: string) => workingDay.slice(0, 7); // "YYYY-MM
  */
 export async function POST(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = (await getServerSession(authOptions)) as AppSession | null;
     if (!session?.user) return err("Unauthorized", 401);
 
-    const body = await req.json().catch(() => ({}));
-    const { leadId, url, productId, workingDay } = body || {};
+    let body: PostBody;
+    try {
+      body = (await req.json()) as PostBody;
+    } catch {
+      body = {};
+    }
+    const { leadId, url, productId, workingDay } = body;
 
-    if (!isObjectId(leadId)) return err("Invalid leadId", 400);
-    if (!isObjectId(productId)) return err("Invalid productId", 400);
+    if (!isObjectIdString(leadId)) return err("Invalid leadId", 400);
+    if (!isObjectIdString(productId)) return err("Invalid productId", 400);
     if (typeof url !== "string" || !url.trim()) return err("Invalid url", 400);
     if (
       typeof workingDay !== "string" ||
@@ -48,22 +67,18 @@ export async function POST(req: NextRequest) {
 
     await connectDB();
 
-    const lead = await Lead.findById(leadId).lean();
+    const lead = await Lead.findById(leadId).lean<LeadLean | null>();
     if (!lead) return err("Lead not found", 404);
 
-    const assignedCompanyId = (lead as any).assignedCompanyId;
-    if (!assignedCompanyId || !isObjectId(String(assignedCompanyId))) {
+    const assignedCompanyId = lead.assignedCompanyId;
+    if (!assignedCompanyId || !isObjectIdString(String(assignedCompanyId))) {
       return err("Lead has no assignedCompanyId", 400);
     }
     const companyId = new mongoose.Types.ObjectId(String(assignedCompanyId));
 
-    const productDoc = await CompanyMonthlyProduct.findById(productId).lean<{
-      _id: mongoose.Types.ObjectId;
-      name: string;
-      month: string; // "YYYY-MM"
-      companyId: mongoose.Types.ObjectId;
-      active: boolean;
-    }>();
+    const productDoc = await CompanyMonthlyProduct.findById(
+      productId
+    ).lean<ProductLean | null>();
     if (!productDoc) return err("Product not found", 404);
     if (productDoc.active === false) return err("Product is inactive", 400);
 
@@ -78,14 +93,14 @@ export async function POST(req: NextRequest) {
       return err("Product and lead belong to different companies", 403);
     }
 
-    const sessionUserId = (session as any).userId;
+    const sessionUserId = session.userId;
     const uploadedBy =
       typeof sessionUserId === "string" &&
       mongoose.Types.ObjectId.isValid(sessionUserId)
         ? new mongoose.Types.ObjectId(sessionUserId)
         : null;
 
-    // ✅ NEW: include required fields productId/productName/productMonth
+    // Create screenshot
     const created = await Screenshot.create({
       lead: new mongoose.Types.ObjectId(leadId),
       url: url.trim(),
@@ -95,12 +110,12 @@ export async function POST(req: NextRequest) {
       reviewed: false,
       companyId,
 
-      // required by your schema now:
+      // required schema fields:
       productId: new mongoose.Types.ObjectId(productDoc._id),
       productName: String(productDoc.name).trim(),
       productMonth: productDoc.month,
 
-      // keep legacy for older UI (safe to keep both):
+      // legacy compatibility:
       product: String(productDoc.name).trim(),
     });
 
@@ -112,7 +127,8 @@ export async function POST(req: NextRequest) {
       },
       201
     );
-  } catch (e: any) {
-    return err(e?.message || "Server error", 500);
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : "Server error";
+    return err(message, 500);
   }
 }

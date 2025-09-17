@@ -21,6 +21,20 @@ type AssignedRow = {
   count: number;
 };
 
+type TodayPayload = {
+  workingDay: string;
+  switch?: {
+    isActive: boolean;
+    activatedAt?: string | null;
+    updatedAt?: string | null;
+  } | null;
+  metrics?: {
+    pendingToday: number;
+    assignedTodayByReceiver: AssignedRow[];
+  } | null;
+  receivers?: Receiver[];
+};
+
 export function useTodayDistribution() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -41,20 +55,25 @@ export function useTodayDistribution() {
         const res = await fetch("/api/admin/distribution/today", {
           cache: "no-store",
         });
-        const data = await res.json();
+        const data = (await res.json()) as Partial<TodayPayload> & {
+          error?: string;
+        };
+
         if (!res.ok) throw new Error(data?.error || "Failed to load");
+
         if (!alive) return;
 
-        setWorkingDay(data.workingDay);
+        setWorkingDay(data.workingDay ?? "");
         setIsActive(Boolean(data.switch?.isActive));
-        setActivatedAt(data.switch?.activatedAt || null);
-        setPendingToday(Number(data.metrics?.pendingToday || 0));
-        setAssignedTodayByReceiver(data.metrics?.assignedTodayByReceiver || []);
-        setReceivers(data.receivers || []);
+        setActivatedAt(data.switch?.activatedAt ?? null);
+        setPendingToday(Number(data.metrics?.pendingToday ?? 0));
+        setAssignedTodayByReceiver(data.metrics?.assignedTodayByReceiver ?? []);
+        setReceivers(data.receivers ?? []);
         setError(null);
-      } catch (e: any) {
+      } catch (e: unknown) {
         if (!alive) return;
-        setError(e?.message || "Failed to load");
+        const msg = e instanceof Error ? e.message : "Failed to load";
+        setError(msg);
       } finally {
         if (alive) setLoading(false);
       }

@@ -290,7 +290,6 @@ export function Sidebar({
   );
 }
 
-
 /* ---------------- APP SHELL + ROLES/CAPS ---------------- */
 import { GitBranch, UserPlus } from "lucide-react";
 
@@ -300,7 +299,7 @@ type Caps = {
   can_distribute_leads?: boolean;
   can_distribute_fbids?: boolean;
   can_create_user?: boolean;
-  [k: string]: any;
+  [k: string]: boolean | undefined; // ← was `any`
 };
 
 export function AppShell({
@@ -486,7 +485,7 @@ export function AppShell({
   }
 
   // Rule B: receivers => hide Upload Lead
-  let filteredOverview = { ...overview, items: [...overview.items] };
+  const filteredOverview = { ...overview, items: [...overview.items] }; // ← was `let`
   if (canReceive) {
     filteredOverview.items = filteredOverview.items.filter(
       (i) => i.href !== "/dashboard/leads/upload"

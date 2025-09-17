@@ -1,18 +1,27 @@
 export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
+import { getServerSession, type Session } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { connectDB } from "@/lib/db";
 import CompanyMonthlyProduct from "@/models/CompanyMonthlyProduct";
 import User from "@/models/User";
+import { Types } from "mongoose";
 
-function json(data: any, status = 200) {
-  return NextResponse.json(data, { status });
-}
-function err(message: string, status = 400) {
-  return NextResponse.json({ error: message }, { status });
-}
+type AppSession = Session & { userId?: string };
+
+type Membership = {
+  companyId?: Types.ObjectId | string;
+  // other fields not needed here
+};
+
+type UserLean = {
+  memberships?: Membership[];
+};
+
+const json = <T>(data: T, status = 200) => NextResponse.json(data, { status });
+const err = (message: string, status = 400) =>
+  NextResponse.json({ error: message }, { status });
 
 /**
  * GET /api/products?month=YYYY-MM[&companyId=...]
@@ -21,7 +30,7 @@ function err(message: string, status = 400) {
  */
 export async function GET(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = (await getServerSession(authOptions)) as AppSession | null;
     if (!session?.user) return err("Unauthorized", 401);
 
     const url = new URL(req.url);
@@ -36,16 +45,19 @@ export async function GET(req: NextRequest) {
     // Resolve companyId
     let companyId = companyIdQ;
     if (!companyId) {
-      const userId = (session as any).userId || null;
+      const userId = session.userId || null;
       const email = session.user.email || null;
       const user =
-        (userId && (await User.findById(userId).lean())) ||
-        (email && (await User.findOne({ email }).lean()));
-      const mems: any[] = Array.isArray(user?.memberships)
-        ? user!.memberships
+        (userId && (await User.findById(userId).lean<UserLean>())) ||
+        (email && (await User.findOne({ email }).lean<UserLean>())) ||
+        null;
+
+      const mems: Membership[] = Array.isArray(user?.memberships)
+        ? user!.memberships!
         : [];
-      if (!mems.length) return json([], 200);
-      companyId = String(mems[0].companyId); // pick first membership if not provided
+      if (!mems.length) return json<string[]>([], 200);
+      companyId = String(mems[0].companyId ?? "");
+      if (!companyId) return json<string[]>([], 200);
     }
 
     const docs = await CompanyMonthlyProduct.find(
@@ -53,13 +65,14 @@ export async function GET(req: NextRequest) {
       { name: 1 }
     )
       .sort({ order: 1, name: 1 })
-      .lean();
+      .lean<{ _id: Types.ObjectId; name: string }[]>();
 
     return json(
       docs.map((d) => ({ _id: String(d._id), name: d.name, month })),
       200
     );
-  } catch (e: any) {
-    return err(e?.message || "Server error", 500);
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : "Server error";
+    return err(message, 500);
   }
 }

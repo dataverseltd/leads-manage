@@ -25,6 +25,25 @@ type Caps = {
 
 type Company = { _id: string; name: string; code?: string; active?: boolean };
 
+type MembershipRole =
+  | "superadmin"
+  | "admin"
+  | "lead_operator"
+  | "fb_submitter"
+  | "fb_analytics_viewer"
+  | "employee"
+  | string;
+
+type Membership = {
+  companyId?: string;
+  role?: MembershipRole;
+};
+
+type AppSession = {
+  memberships?: Membership[];
+  caps?: { can_create_user?: boolean };
+};
+
 const BASE_ROLES = [
   { value: "lead_operator", label: "Lead Operator" },
   { value: "fb_submitter", label: "FB Submitter" },
@@ -97,15 +116,6 @@ function roleDefaultCaps(role: string): Caps {
         can_distribute_fbids: false,
         can_create_user: false,
       };
-    // case "fb_submitter":
-    // case "fb_analytics_viewer":
-    //   return {
-    //     canUploadLeads: false,
-    //     canReceiveLeads: false,
-    //     can_distribute_leads: false,
-    //     can_distribute_fbids: false,
-    //     can_create_user: false,
-    //   };
     default:
       return {
         canUploadLeads: false,
@@ -120,11 +130,14 @@ function roleDefaultCaps(role: string): Caps {
 // --- Page -------------------------------------------------------------------
 
 export default function CreateEmployeePage() {
-  const { data: session } = useSession();
+  const { data } = useSession();
+  const session = (data ?? {}) as AppSession;
 
-  const memberships = (session as any)?.memberships || [];
-  const isSuperadmin = memberships.some((m: any) => m?.role === "superadmin");
-  const canCreate = isSuperadmin || !!(session as any)?.caps?.can_create_user;
+  const memberships: Membership[] = Array.isArray(session.memberships)
+    ? session.memberships
+    : [];
+  const isSuperadmin = memberships.some((m) => m?.role === "superadmin");
+  const canCreate = isSuperadmin || Boolean(session.caps?.can_create_user);
 
   // Company list (names)
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -142,7 +155,6 @@ export default function CreateEmployeePage() {
     caps: roleDefaultCaps("lead_operator") as Caps,
   });
 
-  const hasMultiCompanies = companies.length > 1;
   const selectedCompany = companies.find((c) => c._id === state.companyId);
   const { restrictRoles, forceLOOnlyReceive, hideReceiveForAll } =
     getCompanyPolicy(selectedCompany);
@@ -166,9 +178,7 @@ export default function CreateEmployeePage() {
         setCompaniesErr(null);
         const res = await fetch(
           "/api/admin/companies?active=1&scope=memberships",
-          {
-            cache: "no-store",
-          }
+          { cache: "no-store" }
         );
         if (!res.ok) throw new Error("Failed to load companies");
         const data = (await res.json()) as Company[];
@@ -176,8 +186,9 @@ export default function CreateEmployeePage() {
         if (data.length === 1 && !state.companyId) {
           setState((s) => ({ ...s, companyId: data[0]._id }));
         }
-      } catch (e: any) {
-        setCompaniesErr(e?.message || "Failed to load companies");
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "Failed to load companies";
+        setCompaniesErr(msg);
       } finally {
         setCompaniesLoading(false);
       }
@@ -314,11 +325,17 @@ export default function CreateEmployeePage() {
           }),
         }
       );
-      const json = await resp.json().catch(() => ({}));
+      const json: unknown = await resp.json().catch(() => ({}));
       setSubmitting(false);
 
       if (!resp.ok) {
-        setToast({ type: "err", msg: json?.error || "Failed to create user" });
+        const msg =
+          typeof json === "object" && json && "error" in json
+            ? String(
+                (json as { error?: unknown }).error ?? "Failed to create user"
+              )
+            : "Failed to create user";
+        setToast({ type: "err", msg });
         return;
       }
       setToast({ type: "ok", msg: "Employee created" });

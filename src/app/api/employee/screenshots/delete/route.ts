@@ -1,11 +1,18 @@
 export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
+import { getServerSession, type Session } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { connectDB } from "@/lib/db";
 import mongoose from "mongoose";
 import Screenshot from "@/models/Screenshot";
+
+type AppSession = Session & {
+  userId?: string;
+  role?: string;
+  activeCompanyId?: string;
+};
+
 type ScreenshotLean = {
   _id: mongoose.Types.ObjectId;
   url: string;
@@ -18,11 +25,17 @@ type ScreenshotLean = {
   createdAt: Date;
 };
 
-const ok = (data: any, status = 200) => NextResponse.json(data, { status });
+type DeleteBody = { id?: string };
+
+type JsonObject = Record<string, unknown>;
+const isPlainObject = (v: unknown): v is JsonObject =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
+const ok = <T>(data: T, status = 200) => NextResponse.json(data, { status });
 const err = (message: string, status = 400) =>
   NextResponse.json({ error: message }, { status });
 
-const isObjectId = (v: unknown): v is string =>
+const isObjectIdString = (v: unknown): v is string =>
   typeof v === "string" && mongoose.Types.ObjectId.isValid(v);
 
 /**
@@ -35,26 +48,33 @@ const isObjectId = (v: unknown): v is string =>
  */
 export async function DELETE(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = (await getServerSession(authOptions)) as AppSession | null;
     if (!session?.user) return err("Unauthorized", 401);
 
-    const body = await req.json().catch(() => ({}));
-    const id = body?.id as string;
+    let bodyUnknown: unknown;
+    try {
+      bodyUnknown = await req.json();
+    } catch {
+      bodyUnknown = {};
+    }
+    const body: DeleteBody = isPlainObject(bodyUnknown)
+      ? (bodyUnknown as DeleteBody)
+      : {};
 
-    if (!isObjectId(id)) return err("Invalid id", 400);
+    const id = body.id;
+    if (!isObjectIdString(id)) return err("Invalid id", 400);
 
     await connectDB();
 
-    const doc = await Screenshot.findById(id).lean<ScreenshotLean>();
+    const doc = await Screenshot.findById(id).lean<ScreenshotLean | null>();
     if (!doc) return err("Not found", 404);
 
-    const role: string = (session as any)?.role || "";
-    const userId: string | null = (session as any)?.userId || null;
-    const activeCompanyId: string | null =
-      (session as any)?.activeCompanyId || null;
+    const role = session.role ?? "";
+    const userId = session.userId ?? null;
+    const activeCompanyId = session.activeCompanyId ?? null;
 
     // company scoping (if session has a company, ensure the screenshot belongs to it)
-    if (isObjectId(activeCompanyId)) {
+    if (isObjectIdString(activeCompanyId)) {
       if (String(doc.companyId || "") !== String(activeCompanyId)) {
         return err("Forbidden (company mismatch)", 403);
       }
@@ -74,8 +94,9 @@ export async function DELETE(req: NextRequest) {
 
     await Screenshot.deleteOne({ _id: id });
 
-    return ok({ success: true });
-  } catch (e: any) {
-    return err(e?.message || "Server error", 500);
+    return ok({ success: true as const });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : "Server error";
+    return err(message, 500);
   }
 }

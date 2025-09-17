@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import Image from "next/image";
 import { Transition, Dialog } from "@headlessui/react";
 import toast from "react-hot-toast";
@@ -21,15 +21,15 @@ export function UploadModal({
   leadId,
   products,
   reloadShots,
-  onUploaded, // ✅ new
-  activeDay,
+  onUploaded,
+  activeDay: _activeDay, // ← rename to avoid unused-var warning
 }: {
   open: boolean;
   onClose: () => void;
   leadId: string | null;
   products: Product[];
   reloadShots: (leadId: string) => Promise<void>;
-  onUploaded?: (workingDay: string) => void; // ✅ new
+  onUploaded?: (workingDay: string) => void;
   activeDay?: string;
 }) {
   const [productId, setProductId] = useState("");
@@ -44,18 +44,21 @@ export function UploadModal({
     setUploading(false);
   };
 
-  const loadShotsLocal = async () => {
+  const loadShotsLocal = useCallback(async () => {
     if (!leadId) return;
-    const r = await fetch(`/api/employee/screenshots/search?leadId=${leadId}`, {
-      cache: "no-store",
-      credentials: "same-origin",
-    });
-    if (r.ok) setShots(await r.json());
-  };
+    const r = await fetch(
+      `/api/employee/screenshots/search?leadId=${encodeURIComponent(leadId)}`,
+      { cache: "no-store", credentials: "same-origin" }
+    );
+    if (!r.ok) return;
+    const json = (await r.json()) as Shot[];
+    setShots(json);
+  }, [leadId]);
 
   // initialize when opened
   useEffect(() => {
     if (!open) return;
+
     // preselect first available product
     if (!productId && products.length > 0) {
       setProductId(products[0]._id);
@@ -63,7 +66,7 @@ export function UploadModal({
     if (leadId) {
       loadShotsLocal();
     }
-  }, [open, leadId, products, productId]);
+  }, [open, products, productId, loadShotsLocal]);
 
   const onUpload = async () => {
     if (!leadId) {
@@ -126,8 +129,9 @@ export function UploadModal({
       // close + reset
       onClose();
       resetState();
-    } catch (e: any) {
-      toast.error(e?.message || "Upload failed");
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Upload failed";
+      toast.error(msg);
     } finally {
       setUploading(false);
     }

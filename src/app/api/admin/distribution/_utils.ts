@@ -1,44 +1,85 @@
 import { NextRequest } from "next/server";
-import mongoose from "mongoose";
-import { getServerSession } from "next-auth";
+import mongoose, { Types } from "mongoose";
+import { getServerSession, type Session } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
-import { connectDB } from "@/lib/db"; // your existing DB connector
-import User from "@/models/User"; // web-side user model
+import { connectDB } from "@/lib/db";
+import User from "@/models/User";
 
-export function getCompanyIdFromReq(req: NextRequest) {
+/* ---------------- Types ---------------- */
+
+type AppSession = Session & {
+  userId?: string; // if you attach this in NextAuth callbacks
+  role?: string;
+  activeCompanyId?: string;
+};
+
+type Membership = {
+  companyId?: Types.ObjectId;
+  role?: "superadmin" | "admin" | "employee" | string;
+  can_distribute_leads?: boolean;
+  canUploadLeads?: boolean;
+};
+
+type UserLean = {
+  _id: Types.ObjectId;
+  email?: string | null;
+  memberships?: Membership[];
+};
+
+type GetUserForSessionResult =
+  | { session: AppSession; userDoc: UserLean }
+  | { session: AppSession | null; userDoc: null }
+  | { session: null; userDoc: null };
+
+/* -------------- Helpers --------------- */
+
+export function getCompanyIdFromReq(req: NextRequest): string | undefined {
   const url = new URL(req.url);
   return (
-    url.searchParams.get("companyId") ||
-    req.headers.get("x-company-id") ||
+    url.searchParams.get("companyId") ??
+    req.headers.get("x-company-id") ??
     undefined
   );
 }
 
-function hasMembershipPermission(m: any) {
-  const isAdmin = m?.role === "superadmin" || m?.role === "admin";
-  const canDistribute = !!m?.can_distribute_leads;
+function hasMembershipPermission(m?: Membership): boolean {
+  if (!m) return false;
+  const isAdmin = m.role === "superadmin" || m.role === "admin";
+  const canDistribute = !!m.can_distribute_leads;
   return isAdmin || canDistribute;
 }
 
-export async function getUserForSession() {
-  const session = await getServerSession(authOptions);
+/**
+ * Look up the current session and its user (by id or email).
+ * Returns `{ session: null, userDoc: null }` if no session.
+ */
+export async function getUserForSession(): Promise<GetUserForSessionResult> {
+  const session = (await getServerSession(authOptions)) as AppSession | null;
   if (!session?.user) return { session: null, userDoc: null };
 
-  const id = (session.user as any)?._id || (session.user as any)?.id || null;
-  const email = session.user.email || null;
-  // Temporarily inside GET/POST after getUserForSession()
+  // Prefer custom `session.userId` if you set it in callbacks, then fallback to typical NextAuth fields.
+  const explicitUserId = session.userId;
+  const embeddedId =
+    (session.user as unknown as { _id?: string; id?: string })?._id ??
+    (session.user as unknown as { _id?: string; id?: string })?.id ??
+    null;
+  const id = explicitUserId ?? embeddedId ?? null;
+  const email = session.user.email ?? null;
 
   await connectDB();
 
-  let userDoc = null;
+  let userDoc: UserLean | null = null;
   if (id && mongoose.isValidObjectId(id)) {
-    userDoc = await User.findById(id).lean();
+    userDoc = await User.findById(id).lean<UserLean>();
   }
   if (!userDoc && email) {
-    userDoc = await User.findOne({ email }).lean();
+    userDoc = await User.findOne({ email }).lean<UserLean>();
   }
 
-  return { session, userDoc };
+  if (userDoc) {
+    return { session: session as AppSession, userDoc };
+  }
+  return { session: session as AppSession, userDoc: null };
 }
 
 /**
@@ -47,33 +88,52 @@ export async function getUserForSession() {
  * - If companyId not provided: allow if ANY membership grants permission.
  */
 export function userHasDistributionPermission(
-  userDoc: any,
+  userDoc: UserLean | null | undefined,
   companyId?: string
-) {
-  if (!userDoc?.memberships || !Array.isArray(userDoc.memberships))
-    return false;
+): boolean {
+  const memberships = Array.isArray(userDoc?.memberships)
+    ? (userDoc!.memberships as Membership[])
+    : [];
+
+  if (!memberships.length) return false;
 
   if (companyId) {
-    const match = userDoc.memberships.find(
-      (m: any) => String(m.companyId) === String(companyId)
+    const match = memberships.find(
+      (m) => String(m.companyId) === String(companyId)
     );
     return hasMembershipPermission(match);
   }
 
   // No companyId passed → allow if any membership grants permission
-  return userDoc.memberships.some((m: any) => hasMembershipPermission(m));
+  return memberships.some((m) => hasMembershipPermission(m));
 }
-export function userHasUploadPermission(userDoc: any, companyId?: string) {
-  if (!userDoc?.memberships || !Array.isArray(userDoc.memberships))
-    return false;
-  const has = (m: any) =>
-    m?.role === "superadmin" || m?.role === "admin" || !!m?.canUploadLeads;
+
+/**
+ * Returns true if the user can upload leads.
+ * Admins and superadmins are always allowed; otherwise require `canUploadLeads`.
+ */
+export function userHasUploadPermission(
+  userDoc: UserLean | null | undefined,
+  companyId?: string
+): boolean {
+  const memberships = Array.isArray(userDoc?.memberships)
+    ? (userDoc!.memberships as Membership[])
+    : [];
+
+  if (!memberships.length) return false;
+
+  const check = (m?: Membership): boolean => {
+    if (!m) return false;
+    return m.role === "superadmin" || m.role === "admin" || !!m.canUploadLeads;
+    // If you instead gate by company roleMode, do that at the callsite.
+  };
 
   if (companyId) {
-    const m = userDoc.memberships.find(
-      (x: any) => String(x.companyId) === String(companyId)
+    const m = memberships.find(
+      (x) => String(x.companyId) === String(companyId)
     );
-    return has(m);
+    return check(m);
   }
-  return userDoc.memberships.some(has);
+
+  return memberships.some((m) => check(m));
 }

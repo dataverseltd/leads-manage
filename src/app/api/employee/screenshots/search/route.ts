@@ -1,18 +1,46 @@
 export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
+import { getServerSession, type Session } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { connectDB } from "@/lib/db";
-import mongoose from "mongoose";
+import mongoose, { Types, type FilterQuery } from "mongoose";
 import Screenshot from "@/models/Screenshot";
 
-const ok = (data: any, status = 200) => NextResponse.json(data, { status });
+/* ------------ Types ------------ */
+
+type AppSession = Session & {
+  activeCompanyId?: string;
+};
+
+type ScreenshotLean = {
+  _id: Types.ObjectId;
+  url: string;
+  product: string;
+  productName?: string; // some schemas keep both; we only read product
+  lead: Types.ObjectId;
+  workingDay?: string; // "YYYY-MM-DD"
+  companyId?: Types.ObjectId;
+  uploadedAt?: Date;
+};
+
+type Shaped = {
+  _id: string;
+  url: string;
+  productName: string;
+  product: string;
+};
+
+/* ---------- Helpers ---------- */
+
+const ok = <T>(data: T, status = 200) => NextResponse.json(data, { status });
 const err = (message: string, status = 400) =>
   NextResponse.json({ error: message }, { status });
 
-const isObjectId = (v: unknown): v is string =>
+const isObjectIdString = (v: unknown): v is string =>
   typeof v === "string" && mongoose.Types.ObjectId.isValid(v);
+
+/* ---------- Route ---------- */
 
 /**
  * GET /api/employee/screenshots/search?leadId=...
@@ -24,7 +52,7 @@ const isObjectId = (v: unknown): v is string =>
  */
 export async function GET(req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = (await getServerSession(authOptions)) as AppSession | null;
     if (!session?.user) return err("Unauthorized", 401);
 
     const url = new URL(req.url);
@@ -32,13 +60,14 @@ export async function GET(req: NextRequest) {
     const workingDay = url.searchParams.get("workingDay") || "";
     const product = url.searchParams.get("product") || "";
 
-    if (!isObjectId(leadId)) return err("Invalid leadId", 400);
+    if (!isObjectIdString(leadId)) return err("Invalid leadId", 400);
 
     await connectDB();
 
-    const q: any = { lead: new mongoose.Types.ObjectId(leadId) };
+    const q: FilterQuery<ScreenshotLean> = {
+      lead: new Types.ObjectId(leadId),
+    };
 
-    // optional
     if (workingDay) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(workingDay)) {
         return err("Invalid workingDay (YYYY-MM-DD)", 400);
@@ -50,28 +79,26 @@ export async function GET(req: NextRequest) {
     }
 
     // optional company scoping if present in session
-    const activeCompanyId = (session as any)?.activeCompanyId;
-    if (isObjectId(activeCompanyId)) {
-      q.companyId = new mongoose.Types.ObjectId(activeCompanyId as string);
+    const activeCompanyId = session.activeCompanyId;
+    if (isObjectIdString(activeCompanyId)) {
+      q.companyId = new Types.ObjectId(activeCompanyId);
     }
 
-    const rows = await Screenshot.find(q, {
-      url: 1,
-      product: 1,
-    })
+    const rows = await Screenshot.find(q)
+      .select({ url: 1, product: 1 })
       .sort({ uploadedAt: -1 })
-      .lean();
+      .lean<ScreenshotLean[]>();
 
-    // shape for the modal
-    const shaped = rows.map((r: any) => ({
+    const shaped: Shaped[] = rows.map((r) => ({
       _id: String(r._id),
-      url: r.url as string,
-      productName: r.product as string,
-      product: r.product as string,
+      url: r.url,
+      productName: r.product, // expose product as productName for UI
+      product: r.product,
     }));
 
     return ok(shaped);
-  } catch (e: any) {
-    return err(e?.message || "Server error", 500);
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : "Server error";
+    return err(message, 500);
   }
 }

@@ -1,6 +1,7 @@
+// ./src/app/dashboard/my-leads/MyLeadsClient.tsx
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Dialog, Transition } from "@headlessui/react";
 import toast from "react-hot-toast";
@@ -20,6 +21,7 @@ import {
 import Ably from "ably";
 import type { Message } from "ably";
 import io from "socket.io-client";
+import Image from "next/image";
 import { getRealtime } from "@/lib/ablyClient";
 import { useProducts } from "@/hooks/useProducts";
 import { UploadModal } from "@/components/leads/UploadModal";
@@ -51,6 +53,7 @@ type Lead = {
   post_link?: string;
   createdAt: string;
 };
+
 type SsItem = {
   product: string;
   count: number;
@@ -59,6 +62,7 @@ type SsItem = {
   lastUploadAt: string;
   recentUrls: string[];
 };
+
 type SsResp = {
   workingDay: string;
   total: number;
@@ -66,13 +70,16 @@ type SsResp = {
   items: SsItem[];
 };
 
+type AblyRealtime = Ably.Realtime;
+type RealtimeChannel = ReturnType<AblyRealtime["channels"]["get"]>;
+
 const PAGE_SIZE = 30;
 
 export default function MyLeadsClient({
   userId,
-  name, // kept if you still use it elsewhere
-  role,
-  caps,
+  name: _name, // unused → underscore to satisfy no-unused-vars
+  role: _role,
+  caps: _caps,
   activeCompanyId,
 }: {
   userId: string;
@@ -107,23 +114,15 @@ export default function MyLeadsClient({
 
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadTarget, setUploadTarget] = useState<Lead | null>(null);
-  const [screenshotSummary, setScreenshotSummary] = useState<
-    {
-      product: string;
-      count: number;
-      distinctLeads: number;
-      firstUploadAt: string;
-      lastUploadAt: string;
-      recentUrls: string[];
-    }[]
-  >([]);
+
+  const [screenshotSummary, setScreenshotSummary] = useState<SsItem[]>([]);
   const [screenshotTotals, setScreenshotTotals] = useState<{
     total: number;
     distinctLeads: number;
   } | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
-  const loadDays = async () => {
+  const loadDays = useCallback(async () => {
     try {
       const res = await fetch("/api/employee/leads/days", {
         cache: "no-store",
@@ -146,64 +145,69 @@ export default function MyLeadsClient({
       console.error("Days request error:", e);
       setDays([]);
     }
-  };
+  }, []);
 
-  const fetchPage = async (page: number, replace = false) => {
-    setLoading(true);
-    try {
-      const p = new URLSearchParams({
-        page: String(page),
-        limit: String(PAGE_SIZE),
-      });
-      if (activeDay) p.set("workingDay", activeDay);
-      if (query.trim()) p.set("q", query.trim());
-      if (status) p.set("status", status);
+  const fetchPage = useCallback(
+    async (page: number, replace = false) => {
+      setLoading(true);
+      try {
+        const p = new URLSearchParams({
+          page: String(page),
+          limit: String(PAGE_SIZE),
+        });
+        if (activeDay) p.set("workingDay", activeDay);
+        if (query.trim()) p.set("q", query.trim());
+        if (status) p.set("status", status);
 
-      const url = `/api/employee/leads?${p.toString()}`;
-      const res = await fetch(url, {
-        cache: "no-store",
-        credentials: "same-origin",
-      });
+        const url = `/api/employee/leads?${p.toString()}`;
+        const res = await fetch(url, {
+          cache: "no-store",
+          credentials: "same-origin",
+        });
 
-      if (!res.ok) {
-        const text = await res.text();
-        console.error("Leads load failed:", res.status, text);
-        throw new Error(text || "Failed to load leads");
+        if (!res.ok) {
+          const text = await res.text();
+          console.error("Leads load failed:", res.status, text);
+          throw new Error(text || "Failed to load leads");
+        }
+
+        const data: {
+          items: Lead[];
+          hasMore: boolean;
+          byLeadShotCount?: Record<string, number>;
+        } = await res.json();
+
+        setRows((prev) => (replace ? data.items : [...prev, ...data.items]));
+        setHasMore(data.hasMore);
+        if (data.byLeadShotCount)
+          setByLeadCount((prev) => ({ ...prev, ...data.byLeadShotCount }));
+      } catch (e: unknown) {
+        const msg =
+          e instanceof Error ? e.message : "An unknown error occurred";
+        console.error(e);
+        toast.error(msg || "Load failed");
+      } finally {
+        setLoading(false);
       }
+    },
+    [activeDay, query, status]
+  );
 
-      const data: {
-        items: Lead[];
-        hasMore: boolean;
-        byLeadShotCount?: Record<string, number>;
-      } = await res.json();
-
-      setRows((prev) => (replace ? data.items : [...prev, ...data.items]));
-      setHasMore(data.hasMore);
-      if (data.byLeadShotCount)
-        setByLeadCount((prev) => ({ ...prev, ...data.byLeadShotCount! }));
-    } catch (e: any) {
-      console.error(e);
-      toast.error(e?.message || "Load failed");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const resetAndFetch = () => {
+  const resetAndFetch = useCallback(() => {
     pageRef.current = 1;
     setRows([]);
     setHasMore(true);
     fetchPage(1, true);
-  };
+  }, [fetchPage]);
 
   useEffect(() => {
     loadDays();
-  }, []);
+  }, [loadDays]);
 
   useEffect(() => {
     const t = setTimeout(() => resetAndFetch(), 200);
     return () => clearTimeout(t);
-  }, [activeDay, status, query]);
+  }, [activeDay, status, query, resetAndFetch]); // ✅ includes resetAndFetch
 
   useEffect(() => {
     if (!sentinelRef.current) return;
@@ -219,7 +223,7 @@ export default function MyLeadsClient({
     );
     obs.observe(sentinelRef.current);
     return () => obs.disconnect();
-  }, [hasMore, loading, activeDay, status, query]);
+  }, [hasMore, loading, activeDay, status, query, fetchPage]); // ✅ includes fetchPage
 
   // Realtime: leads + screenshots
   useEffect(() => {
@@ -227,10 +231,11 @@ export default function MyLeadsClient({
 
     let socket: ReturnType<typeof io> | null = null;
     let ably: Ably.Realtime | null = null;
-    let chCompany: any = null;
-    let chShotCompany: any = null;
-    let chShotGlobal: any = null;
-    let polling: NodeJS.Timeout | null = null;
+    let chCompany: RealtimeChannel | null = null;
+    let chShotCompany: RealtimeChannel | null = null;
+    let chShotGlobal: RealtimeChannel | null = null;
+    let chGlobalLead: RealtimeChannel | null = null;
+    let polling: ReturnType<typeof setInterval> | null = null;
 
     const companyChannel = activeCompanyId
       ? `company:${activeCompanyId}:leads`
@@ -241,19 +246,31 @@ export default function MyLeadsClient({
     const globalLeadChannel = "leads:new";
     const globalShotChannel = "screenshots:new";
 
-    const getIdString = (v: any) =>
-      typeof v === "string" ? v : (v && v._id) || String(v || "");
+    const getIdString = (v: unknown) => {
+      if (typeof v === "string") return v;
+      if (v && typeof v === "object" && "_id" in v) {
+        const id = (v as { _id?: unknown })._id;
+        return typeof id === "string" ? id : String(id ?? "");
+      }
+      return String(v ?? "");
+    };
 
-    const onLead = (lead: any) => {
+    type RTLead = {
+      _id: string;
+      assigned_to: string | { _id: string };
+      workingDay: string;
+    } & Partial<Lead>;
+
+    const onLead = (lead: RTLead) => {
       if (getIdString(lead.assigned_to) !== String(userId)) return;
       if (activeDay && lead.workingDay !== activeDay) return;
       setRows((prev) =>
-        prev.some((x) => x._id === lead._id) ? prev : [lead, ...prev]
+        prev.some((x) => x._id === lead._id) ? prev : [lead as Lead, ...prev]
       );
       toast.success("New lead assigned to you");
     };
 
-    const onScreenshot = (payload: any) => {
+    const onScreenshot = (payload: { leadId: string; workingDay: string }) => {
       const { leadId, workingDay } = payload || {};
       if (activeDay && workingDay !== activeDay) return;
       setByLeadCount((prev) => ({
@@ -303,21 +320,25 @@ export default function MyLeadsClient({
             src === "socket" ? "ably" : src ?? "ably"
           );
           if (companyChannel) {
-            chCompany = ably.channels.get(companyChannel);
-            chCompany.subscribe("lead", (msg: Message) => onLead(msg.data));
-          }
-          const chGlobalLead = ably.channels.get(globalLeadChannel);
-          chGlobalLead.subscribe("lead", (msg: Message) => onLead(msg.data));
-
-          if (shotCompanyChannel) {
-            chShotCompany = ably.channels.get(shotCompanyChannel);
-            chShotCompany.subscribe("screenshot", (msg: Message) =>
-              onScreenshot(msg.data)
+            chCompany = ably!.channels.get(companyChannel);
+            chCompany.subscribe("lead", (msg: Message) =>
+              onLead(msg.data as RTLead)
             );
           }
-          chShotGlobal = ably.channels.get(globalShotChannel);
+          chGlobalLead = ably!.channels.get(globalLeadChannel);
+          chGlobalLead.subscribe("lead", (msg: Message) =>
+            onLead(msg.data as RTLead)
+          );
+
+          if (shotCompanyChannel) {
+            chShotCompany = ably!.channels.get(shotCompanyChannel);
+            chShotCompany.subscribe("screenshot", (msg: Message) =>
+              onScreenshot(msg.data as { leadId: string; workingDay: string })
+            );
+          }
+          chShotGlobal = ably!.channels.get(globalShotChannel);
           chShotGlobal.subscribe("screenshot", (msg: Message) =>
-            onScreenshot(msg.data)
+            onScreenshot(msg.data as { leadId: string; workingDay: string })
           );
         });
 
@@ -336,11 +357,12 @@ export default function MyLeadsClient({
       chCompany?.unsubscribe?.();
       chShotCompany?.unsubscribe?.();
       chShotGlobal?.unsubscribe?.();
+      chGlobalLead?.unsubscribe?.();
       ably?.close?.();
 
       if (polling) clearInterval(polling);
     };
-  }, [userId, activeCompanyId, activeDay]);
+  }, [userId, activeCompanyId, activeDay, fetchPage]);
 
   // Status update
   const updateStatus = async (id: string, next: "approved" | "rejected") => {
@@ -375,7 +397,7 @@ export default function MyLeadsClient({
     return { total, approved, rejected, assigned };
   }, [rows]);
 
-  //screenshot summary for the active day
+  // screenshot summary for the active day
   async function fetchScreenshotSummary(day: string) {
     const r = await fetch(
       `/api/employee/screenshots/summary?workingDay=${encodeURIComponent(day)}`,
@@ -384,8 +406,12 @@ export default function MyLeadsClient({
         credentials: "same-origin",
       }
     );
-    const data: SsResp = await r.json();
-    if (!r.ok) throw new Error(data?.error || "Failed to load SS summary");
+    const data = (await r.json()) as SsResp;
+    if (!r.ok)
+      throw new Error(
+        (data as unknown as { error?: string })?.error ||
+          "Failed to load SS summary"
+      );
     setScreenshotSummary(data.items);
     setScreenshotTotals({
       total: data.total,
@@ -393,7 +419,6 @@ export default function MyLeadsClient({
     });
   }
 
-  // effect on activeDay change
   useEffect(() => {
     if (!activeDay) {
       setScreenshotSummary([]);
@@ -407,7 +432,6 @@ export default function MyLeadsClient({
   }, [activeDay]);
 
   const handleUploaded = (workingDay: string) => {
-    // refresh only if it affects the currently selected day
     if (activeDay && workingDay === activeDay) {
       fetchScreenshotSummary(activeDay).catch(() => {});
     }
@@ -457,7 +481,11 @@ export default function MyLeadsClient({
 
           <select
             value={status}
-            onChange={(e) => setStatus(e.target.value as any)}
+            onChange={(e) =>
+              setStatus(
+                e.target.value as "" | "assigned" | "approved" | "rejected"
+              )
+            } // ✅ no `any`
             className="border border-gray-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-sm rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
           >
             <option value="">All Status</option>
@@ -479,7 +507,6 @@ export default function MyLeadsClient({
         </div>
       </div>
 
-      {/* Summary */}
       {/* Summary */}
       {activeDay && (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
@@ -511,7 +538,8 @@ export default function MyLeadsClient({
           </div>
         </div>
       )}
-      {/* SS Summary header row (optional) */}
+
+      {/* SS Summary header */}
       {activeDay && (
         <div className="mt-2 flex items-center gap-4 text-sm">
           <span className="text-gray-500 dark:text-gray-400">
@@ -527,7 +555,7 @@ export default function MyLeadsClient({
         </div>
       )}
 
-      {/* Your SS Summary grid */}
+      {/* SS Summary grid */}
       {activeDay && (
         <div className="mb-6 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 mt-4">
           {screenshotSummary.map((item) => (
@@ -547,21 +575,21 @@ export default function MyLeadsClient({
                 {item.count}
               </p>
 
-              {/* Optional: tiny recent thumbnails row */}
               {!!item.recentUrls?.length && (
                 <div className="mt-2 flex -space-x-2">
                   {item.recentUrls.slice(0, 3).map((u) => (
-                    <img
+                    <Image
                       key={u}
                       src={u}
                       alt=""
+                      width={32}
+                      height={32}
                       className="w-8 h-8 rounded border border-white dark:border-neutral-900 object-cover"
                     />
                   ))}
                 </div>
               )}
 
-              {/* Optional: subline with distinct leads */}
               <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
                 Leads: {item.distinctLeads}
               </p>
@@ -741,7 +769,7 @@ export default function MyLeadsClient({
               {loading &&
                 Array.from({ length: 6 }).map((_, i) => (
                   <tr key={`sk-${i}`} className="animate-pulse">
-                    {Array.from({ length: 9 }).map((_, j) => (
+                    {Array.from({ length: 9 }).map((__, j) => (
                       <td key={`skc-${i}-${j}`} className="px-4 py-4">
                         <div className="h-4 rounded bg-gray-200 dark:bg-neutral-800" />
                       </td>
@@ -956,7 +984,7 @@ export default function MyLeadsClient({
         leadId={uploadTarget?._id || null}
         products={products}
         reloadShots={reloadShots}
-        onUploaded={handleUploaded} // ✅ here
+        onUploaded={handleUploaded}
         activeDay={activeDay}
       />
     </div>

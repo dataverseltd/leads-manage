@@ -1,51 +1,104 @@
 export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
+import { getServerSession, type Session } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { connectDB } from "@/lib/db";
 import Company from "@/models/Company";
 import User from "@/models/User";
-import mongoose from "mongoose";
+import mongoose, { Types } from "mongoose";
 import CompanyMonthlyProduct from "@/models/CompanyMonthlyProduct";
 
-type Safe<T> = T | null | undefined;
+/* ---------- Types ---------- */
+
+type AppSession = Session & {
+  userId?: string;
+  role?: string;
+  activeCompanyId?: string;
+};
+
+type Membership = {
+  companyId?: Types.ObjectId;
+  role?: "superadmin" | "admin" | "employee" | string;
+  can_manage_products?: boolean;
+};
+
+type UserLean = {
+  _id: Types.ObjectId;
+  email?: string | null;
+  memberships?: Membership[];
+};
+
+type CompanyLean = {
+  _id: Types.ObjectId;
+  roleMode: "uploader" | "receiver" | "hybrid";
+};
+
+type ListedProduct = {
+  _id: string;
+  name: string;
+  order: number;
+  active: boolean;
+};
+
+type PutBody = { products?: unknown };
+type DeleteBody = { id?: string };
+
+/* ---------- Helpers ---------- */
+
+type WithStatus = Error & { status?: number };
+
+const httpError = (message: string, status: number): WithStatus => {
+  const e = new Error(message) as WithStatus;
+  e.status = status;
+  return e;
+};
 
 function jsonError(message: string, status = 400) {
   return NextResponse.json({ error: message }, { status });
 }
 
-function ok(data: unknown, status = 200) {
+function ok<T>(data: T, status = 200) {
   return NextResponse.json(data, { status });
 }
 
-// ---- shared guard (respects uploader lock) ----
-async function assertCanEditProducts(session: any, companyId: string) {
-  if (!session?.user)
-    throw Object.assign(new Error("Unauthorized"), { status: 401 });
+function isStringArray(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every((x) => typeof x === "string");
+}
+
+/** Shared guard (respects uploader lock) */
+async function assertCanEditProducts(
+  session: AppSession | null,
+  companyId: string
+) {
+  if (!session?.user) throw httpError("Unauthorized", 401);
 
   await connectDB();
-  const company = await Company.findById(companyId).lean();
-  if (!company)
-    throw Object.assign(new Error("Company not found"), { status: 404 });
+
+  // Only need roleMode; keep query lean & small
+  const company = await Company.findById(companyId)
+    .select({ roleMode: 1 })
+    .lean<CompanyLean | null>();
+  if (!company) throw httpError("Company not found", 404);
 
   if (company.roleMode === "uploader") {
-    throw Object.assign(
-      new Error("Editing products is disabled for upload-only companies"),
-      { status: 403 }
+    throw httpError(
+      "Editing products is disabled for upload-only companies",
+      403
     );
   }
 
-  const userId = (session as any).userId as Safe<string>;
-  const email = session.user.email as Safe<string>;
+  const userId = session.userId;
+  const email = session.user.email ?? null;
 
-  const user =
-    (userId && (await User.findById(userId).lean())) ||
-    (email && (await User.findOne({ email }).lean()));
+  const user: UserLean | null =
+    (userId && (await User.findById(userId).lean<UserLean>())) ||
+    (email && (await User.findOne({ email }).lean<UserLean>())) ||
+    null;
 
-  if (!user) throw Object.assign(new Error("User not found"), { status: 404 });
+  if (!user) throw httpError("User not found", 404);
 
-  const memberships: any[] = Array.isArray(user.memberships)
+  const memberships: Membership[] = Array.isArray(user.memberships)
     ? user.memberships
     : [];
   const isSuper = memberships.some((m) => m?.role === "superadmin");
@@ -54,33 +107,35 @@ async function assertCanEditProducts(session: any, companyId: string) {
   const m = memberships.find(
     (mm) => String(mm.companyId) === String(companyId)
   );
-  if (m && (m.role === "admin" || m.can_manage_products)) return;
+  if (m && (m.role === "admin" || !!m.can_manage_products)) return;
 
-  throw Object.assign(new Error("Forbidden"), { status: 403 });
+  throw httpError("Forbidden", 403);
 }
 
 function getMonth(req: NextRequest) {
   const url = new URL(req.url);
   const month = url.searchParams.get("month") || "";
   if (!/^\d{4}-\d{2}$/.test(month)) {
-    throw Object.assign(new Error("Invalid or missing ?month=YYYY-MM"), {
-      status: 400,
-    });
+    throw httpError("Invalid or missing ?month=YYYY-MM", 400);
   }
   return month;
 }
 
-// Utility: list products for company+month
-async function listFor(companyId: string, month: string) {
+/** Utility: list products for company+month */
+async function listFor(
+  companyId: string,
+  month: string
+): Promise<ListedProduct[]> {
   await connectDB();
   const items = await CompanyMonthlyProduct.find(
     { companyId, month, active: true },
     { name: 1, order: 1, active: 1 } // projection
   )
     .sort({ order: 1, name: 1 })
-    .lean();
+    .lean<
+      { _id: Types.ObjectId; name: string; order?: number; active?: boolean }[]
+    >();
 
-  // return trimmed shape
   return items.map((p) => ({
     _id: String(p._id),
     name: p.name,
@@ -89,13 +144,15 @@ async function listFor(companyId: string, month: string) {
   }));
 }
 
+/* ---------- Routes ---------- */
+
 // GET -> read list (with optional fallback to latest available month if empty)
 export async function GET(
   req: NextRequest,
   { params }: { params: { companyId: string } }
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = (await getServerSession(authOptions)) as AppSession | null;
     if (!session?.user) return jsonError("Unauthorized", 401);
 
     await connectDB();
@@ -110,9 +167,9 @@ export async function GET(
         { month: 1 }
       )
         .sort({ month: -1 })
-        .lean();
+        .lean<{ month: string } | null>();
 
-      let fallback = null as any;
+      let fallback: { month: string; products: ListedProduct[] } | null = null;
       if (latest?.month && latest.month !== month) {
         const fp = await listFor(params.companyId, latest.month);
         if (fp.length) {
@@ -120,12 +177,14 @@ export async function GET(
         }
       }
 
-      return ok({ month, products: [], fallback });
+      return ok({ month, products: [] as ListedProduct[], fallback });
     }
 
     return ok({ month, products });
-  } catch (e: any) {
-    return jsonError(e?.message || "Server error", e?.status || 500);
+  } catch (e: unknown) {
+    const status = (e as WithStatus)?.status ?? 500;
+    const message = e instanceof Error ? e.message : "Server error";
+    return jsonError(message, status);
   }
 }
 
@@ -135,13 +194,20 @@ export async function PUT(
   { params }: { params: { companyId: string } }
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = (await getServerSession(authOptions)) as AppSession | null;
     await assertCanEditProducts(session, params.companyId);
 
     await connectDB();
     const month = getMonth(req);
-    const body = await req.json().catch(() => ({} as any));
-    const names: string[] = Array.isArray(body.products) ? body.products : [];
+
+    let body: PutBody;
+    try {
+      body = (await req.json()) as PutBody;
+    } catch {
+      body = {};
+    }
+
+    const names: string[] = isStringArray(body.products) ? body.products : [];
 
     // Upsert each product by (companyId, month, name)
     for (const rawName of names) {
@@ -154,7 +220,7 @@ export async function PUT(
       );
     }
 
-    // Optionally, deactivate products that are not in the new list
+    // Deactivate products that are not in the new list
     await CompanyMonthlyProduct.updateMany(
       { companyId: params.companyId, month, name: { $nin: names } },
       { $set: { active: false } }
@@ -162,8 +228,10 @@ export async function PUT(
 
     const products = await listFor(params.companyId, month);
     return ok({ month, products });
-  } catch (e: any) {
-    return jsonError(e?.message || "Forbidden", e?.status || 403);
+  } catch (e: unknown) {
+    const status = (e as WithStatus)?.status ?? 403;
+    const message = e instanceof Error ? e.message : "Forbidden";
+    return jsonError(message, status);
   }
 }
 
@@ -173,7 +241,7 @@ export async function POST(
   { params }: { params: { companyId: string } }
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = (await getServerSession(authOptions)) as AppSession | null;
     await assertCanEditProducts(session, params.companyId);
 
     await connectDB();
@@ -192,8 +260,10 @@ export async function POST(
 
     const products = await listFor(params.companyId, month);
     return ok({ month, products });
-  } catch (e: any) {
-    return jsonError(e?.message || "Forbidden", e?.status || 403);
+  } catch (e: unknown) {
+    const status = (e as WithStatus)?.status ?? 403;
+    const message = e instanceof Error ? e.message : "Forbidden";
+    return jsonError(message, status);
   }
 }
 
@@ -203,12 +273,12 @@ export async function DELETE(
   { params }: { params: { companyId: string } }
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = (await getServerSession(authOptions)) as AppSession | null;
     await assertCanEditProducts(session, params.companyId);
 
     await connectDB();
     const month = getMonth(req);
-    const { id } = (await req.json()) as { id?: string };
+    const { id } = (await req.json()) as DeleteBody;
 
     if (!id || !mongoose.Types.ObjectId.isValid(id)) {
       return jsonError("Missing or invalid product id", 400);
@@ -222,7 +292,9 @@ export async function DELETE(
 
     const products = await listFor(params.companyId, month);
     return ok({ month, products });
-  } catch (e: any) {
-    return jsonError(e?.message || "Forbidden", e?.status || 403);
+  } catch (e: unknown) {
+    const status = (e as WithStatus)?.status ?? 403;
+    const message = e instanceof Error ? e.message : "Forbidden";
+    return jsonError(message, status);
   }
 }

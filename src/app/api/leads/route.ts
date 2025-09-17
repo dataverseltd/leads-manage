@@ -2,40 +2,51 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
+import { getServerSession, type Session } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
 const SERVER_API = process.env.SERVER_API_URL || "http://127.0.0.1:4000";
 
-async function readBody(req: Request) {
+type AppSession = Session & { sessionToken?: string };
+
+type JsonValue = string | number | boolean | null | JsonObject | JsonValue[];
+type JsonObject = { [k: string]: JsonValue };
+
+async function readBody(req: Request): Promise<unknown> {
   try {
     return await req.json();
   } catch {
     return undefined;
   }
 }
-function getCompanyId(req: Request, body?: any) {
+
+const isPlainObject = (v: unknown): v is JsonObject =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
+function getCompanyId(req: Request, body?: JsonObject): string | undefined {
   const url = new URL(req.url);
-  return (
-    url.searchParams.get("companyId") ||
-    body?.companyId ||
-    req.headers.get("x-company-id") ||
-    undefined
-  );
+  const fromQuery = url.searchParams.get("companyId") || undefined;
+  const fromBody =
+    typeof body?.companyId === "string" && body.companyId.trim()
+      ? (body.companyId as string)
+      : undefined;
+  const fromHeader = req.headers.get("x-company-id") || undefined;
+  return fromQuery ?? fromBody ?? fromHeader ?? undefined;
 }
 
 export async function POST(req: Request) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = (await getServerSession(authOptions)) as AppSession | null;
     if (!session)
       return NextResponse.json(
         { error: "Unauthorized: no session" },
         { status: 401 }
       );
 
-    const body = await readBody(req);
+    const bodyUnknown = await readBody(req);
+    const body: JsonObject = isPlainObject(bodyUnknown) ? bodyUnknown : {};
     const companyId = getCompanyId(req, body);
-    const sessionToken = (session as any).sessionToken as string | undefined;
+    const sessionToken = session.sessionToken;
     if (!sessionToken)
       return NextResponse.json(
         { error: "Unauthorized: missing sessionToken" },
@@ -54,24 +65,24 @@ export async function POST(req: Request) {
         "x-session-token": sessionToken,
         "x-company-id": companyId,
       },
-      body: JSON.stringify(body ?? {}),
+      body: JSON.stringify(body),
     });
 
     const data = await resp.json().catch(() => ({}));
     return NextResponse.json(data, { status: resp.status });
-  } catch (err: any) {
-    // Map low-level network errors into a clear message
+  } catch (err: unknown) {
+    const e = err as NodeJS.ErrnoException;
     const msg =
-      err?.code === "ECONNREFUSED"
+      e?.code === "ECONNREFUSED"
         ? `Cannot reach server at ${SERVER_API}. Is it running?`
-        : err?.message || "Proxy error";
+        : e?.message || "Proxy error";
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
 
 export async function GET(req: Request) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = (await getServerSession(authOptions)) as AppSession | null;
     if (!session)
       return NextResponse.json(
         { error: "Unauthorized: no session" },
@@ -80,7 +91,7 @@ export async function GET(req: Request) {
 
     const url = new URL(req.url);
     const companyId = url.searchParams.get("companyId") || undefined;
-    const sessionToken = (session as any).sessionToken as string | undefined;
+    const sessionToken = session.sessionToken;
     if (!sessionToken)
       return NextResponse.json(
         { error: "Unauthorized: missing sessionToken" },
@@ -104,11 +115,12 @@ export async function GET(req: Request) {
 
     const data = await resp.json().catch(() => ({}));
     return NextResponse.json(data, { status: resp.status });
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const e = err as NodeJS.ErrnoException;
     const msg =
-      err?.code === "ECONNREFUSED"
+      e?.code === "ECONNREFUSED"
         ? `Cannot reach server at ${SERVER_API}. Is it running?`
-        : err?.message || "Proxy error";
+        : e?.message || "Proxy error";
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

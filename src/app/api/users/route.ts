@@ -3,12 +3,21 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
+import { getServerSession, type Session } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
 const SERVER_API = process.env.SERVER_API_URL || "http://localhost:4000";
 
-function getCompanyId(req: Request) {
+type AppSession = Session & {
+  sessionToken?: string;
+  memberships?: Array<{ role?: string }>;
+};
+
+type JsonObject = Record<string, unknown>;
+const isPlainObject = (v: unknown): v is JsonObject =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
+function getCompanyId(req: Request): string | undefined {
   const url = new URL(req.url);
   return (
     url.searchParams.get("companyId") ||
@@ -17,7 +26,7 @@ function getCompanyId(req: Request) {
   );
 }
 
-async function readBody(req: Request) {
+async function readBody(req: Request): Promise<unknown> {
   try {
     return await req.json();
   } catch {
@@ -25,18 +34,35 @@ async function readBody(req: Request) {
   }
 }
 
+type CreateUserPayloadOut = {
+  name?: string;
+  email?: string;
+  employeeId?: string;
+  password?: string;
+  role?: string;
+  caps?: {
+    canUploadLeads: boolean;
+    canReceiveLeads: boolean;
+    can_distribute_leads: boolean;
+    can_distribute_fbids: boolean;
+    can_create_user: boolean;
+  };
+};
+
 // (optional) allow-list the fields we forward
-function pickCreateUserPayload(src: any) {
-  const out: any = {};
-  if (typeof src?.name === "string") out.name = src.name;
-  if (typeof src?.email === "string") out.email = src.email;
-  if (typeof src?.employeeId === "string") out.employeeId = src.employeeId;
-  if (typeof src?.password === "string") out.password = src.password;
-  if (typeof src?.role === "string") out.role = src.role;
+function pickCreateUserPayload(src: unknown): CreateUserPayloadOut {
+  const out: CreateUserPayloadOut = {};
+  if (!isPlainObject(src)) return out;
+
+  if (typeof src.name === "string") out.name = src.name;
+  if (typeof src.email === "string") out.email = src.email;
+  if (typeof src.employeeId === "string") out.employeeId = src.employeeId;
+  if (typeof src.password === "string") out.password = src.password;
+  if (typeof src.role === "string") out.role = src.role;
 
   // caps: { canUploadLeads, canReceiveLeads, can_distribute_leads, can_distribute_fbids, can_create_user }
-  if (src?.caps && typeof src.caps === "object") {
-    const caps = src.caps;
+  if (isPlainObject(src.caps)) {
+    const caps = src.caps as JsonObject;
     out.caps = {
       canUploadLeads: !!caps.canUploadLeads,
       canReceiveLeads: !!caps.canReceiveLeads,
@@ -50,14 +76,14 @@ function pickCreateUserPayload(src: any) {
 }
 
 export async function POST(req: Request) {
-  const session = await getServerSession(authOptions);
+  const session = (await getServerSession(authOptions)) as AppSession | null;
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const body = await readBody(req);
+  const bodyUnknown = await readBody(req);
   const companyId = getCompanyId(req);
-  const sessionToken = (session as any).sessionToken as string | undefined;
+  const sessionToken = session.sessionToken;
 
   if (!sessionToken) {
     return NextResponse.json(
@@ -73,7 +99,11 @@ export async function POST(req: Request) {
   }
 
   // 🚫 Never trust body.companyId — ignore it to prevent cross-company creation
-  if (body?.companyId && body.companyId !== companyId) {
+  if (
+    isPlainObject(bodyUnknown) &&
+    typeof bodyUnknown.companyId === "string" &&
+    bodyUnknown.companyId !== companyId
+  ) {
     return NextResponse.json(
       { error: "companyId mismatch between query/header and body" },
       { status: 400 }
@@ -81,17 +111,23 @@ export async function POST(req: Request) {
   }
 
   // (optional) second-layer role guard on the edge (server also should enforce)
-  const isSuperadmin = !!(session as any)?.memberships?.some(
-    (m: any) => m?.role === "superadmin"
-  );
-  if (body?.role === "superadmin" && !isSuperadmin) {
+  const isSuperadmin =
+    Array.isArray(session.memberships) &&
+    session.memberships.some((m) => m?.role === "superadmin");
+
+  if (
+    isPlainObject(bodyUnknown) &&
+    typeof bodyUnknown.role === "string" &&
+    bodyUnknown.role === "superadmin" &&
+    !isSuperadmin
+  ) {
     return NextResponse.json(
       { error: "Only superadmin can create superadmin users" },
       { status: 403 }
     );
   }
 
-  const forwardBody = pickCreateUserPayload(body || {});
+  const forwardBody = pickCreateUserPayload(bodyUnknown);
 
   const resp = await fetch(`${SERVER_API}/api/users`, {
     method: "POST",

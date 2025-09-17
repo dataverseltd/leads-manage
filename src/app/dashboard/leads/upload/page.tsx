@@ -44,8 +44,16 @@ type Suggestion = Pick<
   | "post_link"
 >;
 
+type UploadResponse = {
+  uploaded?: number;
+  assignedNow?: number;
+  note?: string | null;
+  error?: string;
+};
+
 export default function LeadSubmitPage() {
-  const { data: session } = useSession();
+  // 1) Fix: avoid unused var warning by prefixing with underscore
+  const { data: _session } = useSession();
   const params = useSearchParams();
   const companyId = params.get("companyId") || params.get("company") || "";
 
@@ -78,7 +86,8 @@ export default function LeadSubmitPage() {
   const validate = (): boolean => {
     const e: Record<string, string> = {};
     for (const f of requiredFields) {
-      const val = String((form as any)[f] ?? "").trim();
+      // 2) Fix: remove `any` by using keyof + precise typing
+      const val = String((form[f] as string | undefined) ?? "").trim();
       if (!val) {
         const label = f
           .replace(/_/g, " ")
@@ -106,7 +115,7 @@ export default function LeadSubmitPage() {
   useEffect(() => {
     try {
       const raw = localStorage.getItem("lead-submit-draft");
-      if (raw) setForm(JSON.parse(raw));
+      if (raw) setForm(JSON.parse(raw) as LeadForm);
     } catch {}
   }, []);
 
@@ -180,23 +189,27 @@ export default function LeadSubmitPage() {
         signal: controller.signal,
       });
 
-      const data = await res.json().catch(() => ({}));
+      const data = (await res.json().catch(() => ({}))) as UploadResponse;
       if (!res.ok) throw new Error(data?.error || "Failed to save lead");
 
-      setServerNote(data?.note || null);
+      setServerNote(data?.note ?? null);
       toast.success(
         `Saved! Uploaded: ${data?.uploaded ?? 1}. Assigned now: ${
           data?.assignedNow ?? 0
         }`
       );
       setForm((f) => ({ ...f, number: "" }));
-    } catch (err: any) {
-      if (err?.name === "AbortError") {
+      setErrors({});
+    } catch (err: unknown) {
+      // 3) Fix: no `any` in catch; use `unknown` + type guard
+      if (err instanceof DOMException && err.name === "AbortError") {
         toast.error(
           "Upload took too long. Check connection; the lead may still have been saved."
         );
+      } else if (err instanceof Error) {
+        toast.error(err.message || "Upload failed");
       } else {
-        toast.error(err?.message || "Upload failed");
+        toast.error("Upload failed");
       }
     } finally {
       clearTimeout(t);
