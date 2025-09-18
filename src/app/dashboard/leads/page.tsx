@@ -42,6 +42,7 @@ type ApiResponse = {
   total: number;
   workingDays?: string[];
 };
+type ErrorResponse = { error: string };
 
 const LIMIT = 20;
 
@@ -118,9 +119,19 @@ export default function UploaderLeadsPage() {
           cache: "no-store",
         }
       );
-      const data = (await res.json()) as ApiResponse;
-      if (!res.ok)
-        throw new Error((data as any)?.error || `HTTP ${res.status}`);
+
+      // parse once
+      const json = await res.json();
+
+      // handle error early and exit
+      if (!res.ok) {
+        const errMsg =
+          (json as { error?: string })?.error ?? `HTTP ${res.status}`;
+        throw new Error(errMsg);
+      }
+
+      // success: now it's safe to treat as ApiResponse
+      const data = json as ApiResponse;
 
       setRows(data.items || []);
       setTotal(data.total || 0);
@@ -216,7 +227,7 @@ export default function UploaderLeadsPage() {
             <select
               value={status}
               onChange={(e) => {
-                setStatus(e.target.value as any);
+                setStatus(e.target.value as "" | LeadStatus);
                 setPage(1);
               }}
               className="rounded-lg border bg-white px-3 py-2 text-sm
