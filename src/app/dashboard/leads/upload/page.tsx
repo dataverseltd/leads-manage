@@ -381,7 +381,7 @@ export default function LeadSubmitPage() {
 
       <div className="mt-8 text-center">
         <Link
-          href="/dashboard/lead-submit/uploaded"
+          href="/dashboard/leads"
           className="inline-block text-indigo-600 dark:text-indigo-400 font-medium hover:underline"
         >
           View Uploaded Leads →

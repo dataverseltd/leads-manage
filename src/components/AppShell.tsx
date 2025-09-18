@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { signOut } from "next-auth/react";
 import {
   Menu,
   ChevronLeft,
@@ -18,8 +19,12 @@ import {
   Bell,
   Moon,
   Sun,
+  GitBranch,
+  UserPlus,
+  Building2,
 } from "lucide-react";
 
+/* ---------- Types ---------- */
 export type NavItem = {
   label: string;
   href: string;
@@ -30,12 +35,20 @@ export type NavItem = {
 
 export type NavSection = { heading?: string; items: NavItem[] };
 
+export type Membership = {
+  companyId: string;
+  companyName: string;
+  roleMode: "uploader" | "receiver" | "hybrid";
+  isPrimary?: boolean;
+};
+
 export type SidebarProps = {
   sections: NavSection[];
   brand?: React.ReactNode;
   user?: { name: string; role?: string; avatarUrl?: string } | null;
   onSignOut?: () => void;
   allowCollapse?: boolean;
+  singleCompanyName?: string | null; // <- derived from memberships if exactly one
 };
 
 const SIDEBAR_LS_KEY = "sidebar:collapsed";
@@ -79,6 +92,7 @@ export function Sidebar({
   user,
   onSignOut,
   allowCollapse = true,
+  singleCompanyName,
 }: SidebarProps) {
   const pathname = usePathname() || "/";
   const [collapsed, setCollapsed] = useState<boolean>(() => {
@@ -155,7 +169,13 @@ export function Sidebar({
         {/* Brand + collapse */}
         <div className="flex items-center gap-2 h-14 px-3 border-b border-zinc-200 dark:border-zinc-800">
           <div className="flex items-center gap-2 text-zinc-900 dark:text-zinc-100 font-semibold truncate">
-            {brand ?? <span className="tracking-tight">DataVerse</span>}
+            {/* {brand ?? <span className="tracking-tight">Hello, </span>} */}
+            {!collapsed && singleCompanyName && (
+              <span className="ml-2 inline-flex items-center gap-1 rounded-md border border-zinc-200 dark:border-zinc-800 px-2 py-0.5 text-[11px] text-zinc-600 dark:text-zinc-300">
+                <Building2 className="h-3.5 w-3.5" />
+                {singleCompanyName}
+              </span>
+            )}
           </div>
           <div className="ml-auto hidden lg:flex items-center gap-1">
             <button
@@ -291,7 +311,6 @@ export function Sidebar({
 }
 
 /* ---------------- APP SHELL + ROLES/CAPS ---------------- */
-import { GitBranch, UserPlus } from "lucide-react";
 
 type Caps = {
   canUploadLeads?: boolean;
@@ -299,28 +318,44 @@ type Caps = {
   can_distribute_leads?: boolean;
   can_distribute_fbids?: boolean;
   can_create_user?: boolean;
-  [k: string]: boolean | undefined; // ← was `any`
+  [k: string]: boolean | undefined;
 };
 
 export function AppShell({
   children,
   user,
-  role, // <-- NEW
+  role,
   caps,
   myLeadsBadge,
+  memberships = [],
 }: {
   children: React.ReactNode;
   user?: SidebarProps["user"];
-  role?: string; // "superadmin" | "admin" | ...
+  role?: string; // "superadmin" | "admin" | "lead_operator" | ...
   caps?: Caps;
   myLeadsBadge?: number | string;
+  memberships?: Membership[];
 }) {
+  /* ---- membership / company label ---- */
+  const active = memberships.find((m) => m.isPrimary);
+  const singleCompanyName =
+    active?.companyName ??
+    (memberships.length === 1 ? memberships[0].companyName : null) ??
+    null;
+
+  const getRoleModeForOperator = (): "uploader" | "receiver" | "hybrid" => {
+    // If only one membership, use that. If multiple, prefer the primary; else fallback to 'hybrid'.
+    if (memberships.length === 1) return memberships[0].roleMode;
+    const primary = memberships.find((m) => m.isPrimary);
+    return primary?.roleMode ?? "hybrid";
+  };
+
   const canUpload = !!caps?.canUploadLeads;
   const canReceive = !!caps?.canReceiveLeads;
   const canDist = !!caps?.can_distribute_leads || !!caps?.can_distribute_fbids;
   const canCreateUser = !!caps?.can_create_user;
 
-  // ---------- base Overview ----------
+  /* ---------- base Overview ---------- */
   const overview: NavSection = {
     heading: "Overview",
     items: [
@@ -337,47 +372,25 @@ export function AppShell({
     ],
   };
 
-  // ---------- Admin section (built dynamically) ----------
+  /* ---------- Admin section (dynamic) ---------- */
   const adminSection: NavSection = {
     heading: "Admin",
     items: [],
   };
 
-  // SUPERADMIN: see everything, always show Admin pages
-  if (role === "superadmin") {
-    adminSection.items.push(
-      {
-        label: "Distribution",
-        href: "/dashboard/admin/distribution",
-        icon: GitBranch,
-      },
-      {
-        label: "Employees / New",
-        href: "/dashboard/admin/employees/new",
-        icon: UserPlus,
-      }
-    );
-
+  /* ---------- Helpers ---------- */
+  const renderLayout = (
+    sections: NavSection[],
+    fallbackUser: { name: string; role?: string }
+  ) => {
     return (
       <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
         <Sidebar
-          sections={[
-            overview,
-            adminSection,
-            {
-              heading: "System",
-              items: [
-                {
-                  label: "Settings",
-                  href: "/dashboard/settings",
-                  icon: Settings,
-                },
-              ],
-            },
-          ]}
-          user={user ?? { name: "Super Admin", role: "superadmin" }}
-          brand={<span className="text-lg">DataVerse</span>}
-          onSignOut={() => {}}
+          sections={sections}
+          user={user ?? fallbackUser}
+          brand={<span className="text-lg">Hello, </span>}
+          singleCompanyName={singleCompanyName}
+          onSignOut={() => signOut({ callbackUrl: "/sign-in" })}
         />
         <div className="lg:pl-[264px] transition-[padding] duration-300">
           <header className="hidden lg:flex sticky top-0 z-30 items-center justify-between gap-3 h-14 px-5 bg-white/70 dark:bg-zinc-900/60 backdrop-blur border-b border-zinc-200 dark:border-zinc-800">
@@ -395,9 +408,50 @@ export function AppShell({
         </div>
       </div>
     );
+  };
+
+  /* ---------- SUPERADMIN ---------- */
+  if (role === "superadmin") {
+    // Hide My Leads & Upload Lead for superadmin
+    const superOverview: NavSection = {
+      ...overview,
+      items: overview.items.filter(
+        (i) =>
+          i.href !== "/dashboard/my-leads" &&
+          i.href !== "/dashboard/leads/upload"
+      ),
+    };
+
+    adminSection.items.push(
+      {
+        label: "Distribution",
+        href: "/dashboard/admin/distribution",
+        icon: GitBranch,
+      },
+      {
+        label: "Employees / New",
+        href: "/dashboard/admin/employees/new",
+        icon: UserPlus,
+      }
+    );
+
+    const sections: NavSection[] = [
+      superOverview,
+      adminSection,
+      {
+        heading: "System",
+        items: [
+          { label: "Settings", href: "/dashboard/settings", icon: Settings },
+        ],
+      },
+    ];
+
+    // If single-company superadmin: we still show company badge (handled by singleCompanyName)
+    // If multi-company superadmin (memberships.length > 1): same sections; just no special restrictions beyond hiding MyLeads/UploadLead.
+    return renderLayout(sections, { name: "Super Admin", role: "superadmin" });
   }
 
-  // ADMIN: Overview + Admin (gated by caps). Ignore the "uploaders see only dashboard" rule.
+  /* ---------- ADMIN ---------- */
   if (role === "admin") {
     if (canDist)
       adminSection.items.push({
@@ -421,34 +475,65 @@ export function AppShell({
       ],
     });
 
-    return (
-      <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
-        <Sidebar
-          sections={sections}
-          user={user ?? { name: "Admin", role: "admin" }}
-          brand={<span className="text-lg">DataVerse</span>}
-          onSignOut={() => {}}
-        />
-        <div className="lg:pl-[264px] transition-[padding] duration-300">
-          <header className="hidden lg:flex sticky top-0 z-30 items-center justify-between gap-3 h-14 px-5 bg-white/70 dark:bg-zinc-900/60 backdrop-blur border-b border-zinc-200 dark:border-zinc-800">
-            <div className="text-sm text-zinc-500">Welcome back</div>
-            <div className="flex items-center gap-2">
-              <button
-                className="p-2 rounded-lg border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-900"
-                aria-label="Notifications"
-              >
-                <Bell className="h-5 w-5" />
-              </button>
-            </div>
-          </header>
-          <main className="p-5">{children}</main>
-        </div>
-      </div>
-    );
+    return renderLayout(sections, { name: "Admin", role: "admin" });
   }
 
-  // OTHER ROLES (operator/submitter/etc.)
-  // Rule A: pure uploaders => Dashboard only
+  /* ---------- LEAD OPERATOR (membership-based visibility) ---------- */
+  if (role === "lead_operator") {
+    const roleMode = getRoleModeForOperator();
+
+    if (roleMode === "uploader") {
+      // uploader company → only Upload Lead page
+      const sections: NavSection[] = [
+        {
+          heading: "Leads",
+          items: [
+            {
+              label: "Upload Lead",
+              href: "/dashboard/leads/upload",
+              icon: Upload,
+            },
+          ],
+        },
+      ];
+      return renderLayout(sections, { name: "User", role: "lead_operator" });
+    }
+
+    if (roleMode === "receiver") {
+      // receiver company → only My Leads
+      const sections: NavSection[] = [
+        {
+          heading: "Leads",
+          items: [
+            { label: "My Leads", href: "/dashboard/my-leads", icon: Users },
+          ],
+        },
+      ];
+      return renderLayout(sections, { name: "User", role: "lead_operator" });
+    }
+
+    // hybrid → normal overview, but if they canReceive we hide Upload Lead
+    const filteredOverview: NavSection = {
+      ...overview,
+      items: overview.items.filter((i) =>
+        canReceive ? i.href !== "/dashboard/leads/upload" : true
+      ),
+    };
+
+    const sections: NavSection[] = [
+      filteredOverview,
+      {
+        heading: "System",
+        items: [
+          { label: "Settings", href: "/dashboard/settings", icon: Settings },
+        ],
+      },
+    ];
+    return renderLayout(sections, { name: "User", role: "lead_operator" });
+  }
+
+  /* ---------- OTHER ROLES (fallback, keep your prior rules) ---------- */
+  // Rule A (older): pure uploaders => Dashboard only — but your new rule supersedes for lead_operator.
   if (canUpload && !canReceive) {
     const sections: NavSection[] = [
       {
@@ -458,39 +543,16 @@ export function AppShell({
         ],
       },
     ];
-    return (
-      <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
-        <Sidebar
-          sections={sections}
-          user={user ?? { name: "User", role: "" }}
-          brand={<span className="text-lg">DataVerse</span>}
-          onSignOut={() => {}}
-        />
-        <div className="lg:pl-[264px] transition-[padding] duration-300">
-          <header className="hidden lg:flex sticky top-0 z-30 items-center justify-between gap-3 h-14 px-5 bg-white/70 dark:bg-zinc-900/60 backdrop-blur border-b border-zinc-200 dark:border-zinc-800">
-            <div className="text-sm text-zinc-500">Welcome back</div>
-            <div className="flex items-center gap-2">
-              <button
-                className="p-2 rounded-lg border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-900"
-                aria-label="Notifications"
-              >
-                <Bell className="h-5 w-5" />
-              </button>
-            </div>
-          </header>
-          <main className="p-5">{children}</main>
-        </div>
-      </div>
-    );
+    return renderLayout(sections, { name: "User" });
   }
 
   // Rule B: receivers => hide Upload Lead
-  const filteredOverview = { ...overview, items: [...overview.items] }; // ← was `let`
-  if (canReceive) {
-    filteredOverview.items = filteredOverview.items.filter(
-      (i) => i.href !== "/dashboard/leads/upload"
-    );
-  }
+  const filteredOverview = {
+    ...overview,
+    items: canReceive
+      ? overview.items.filter((i) => i.href !== "/dashboard/leads/upload")
+      : overview.items,
+  };
 
   const sections: NavSection[] = [
     filteredOverview,
@@ -502,30 +564,7 @@ export function AppShell({
     },
   ];
 
-  return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
-      <Sidebar
-        sections={sections}
-        user={user ?? { name: "User", role: "" }}
-        brand={<span className="text-lg">DataVerse</span>}
-        onSignOut={() => {}}
-      />
-      <div className="lg:pl-[264px] transition-[padding] duration-300">
-        <header className="hidden lg:flex sticky top-0 z-30 items-center justify-between gap-3 h-14 px-5 bg-white/70 dark:bg-zinc-900/60 backdrop-blur border-b border-zinc-200 dark:border-zinc-800">
-          <div className="text-sm text-zinc-500">Welcome back</div>
-          <div className="flex items-center gap-2">
-            <button
-              className="p-2 rounded-lg border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-900"
-              aria-label="Notifications"
-            >
-              <Bell className="h-5 w-5" />
-            </button>
-          </div>
-        </header>
-        <main className="p-5">{children}</main>
-      </div>
-    </div>
-  );
+  return renderLayout(sections, { name: "User" });
 }
 
 export default AppShell;

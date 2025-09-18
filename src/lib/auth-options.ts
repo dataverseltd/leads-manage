@@ -48,13 +48,35 @@ interface MembershipView {
   canReceiveLeads: boolean;
 }
 
-/** Minimal Company shape from lean() */
+// --- add name to the lean type ---
 type CompanyLean = {
   _id: Types.ObjectId;
+  name?: string; // <-- NEW
   code?: string;
   roleMode?: RoleMode;
   active?: boolean;
 };
+
+// --- add companyName to the membership view returned to client ---
+interface MembershipView {
+  companyId: string;
+  companyCode?: string;
+  companyName?: string; // <-- NEW
+  role: MembershipDoc["role"];
+  roleMode: RoleMode;
+  active: boolean;
+
+  // raw caps from DB
+  canUploadLeads_raw: boolean;
+  canReceiveLeads_raw: boolean;
+  can_distribute_leads: boolean;
+  can_distribute_fbids: boolean;
+  can_create_user: boolean;
+
+  // effective caps after company policy
+  canUploadLeads: boolean;
+  canReceiveLeads: boolean;
+}
 
 /** Augment JWT token shape we store */
 type AugmentedToken = JWT & {
@@ -245,18 +267,19 @@ export const authOptions: NextAuthOptions = {
 
       const companies: CompanyLean[] = companyIds.length
         ? await Company.find({ _id: { $in: companyIds } })
-            .select("_id code roleMode active")
+            .select("_id name code roleMode active")
             .lean<CompanyLean[]>()
         : [];
 
       const companyMap = new Map<
         string,
-        { roleMode: RoleMode; code?: string; active?: boolean }
+        { roleMode: RoleMode; code?: string; name?: string; active?: boolean }
       >();
       for (const c of companies) {
         companyMap.set(String(c._id), {
           roleMode: c.roleMode ?? "hybrid",
           code: c.code,
+          name: c.name, // <-- store name
           active: c.active,
         });
       }
@@ -278,6 +301,7 @@ export const authOptions: NextAuthOptions = {
         return {
           companyId: cid,
           companyCode: comp?.code ? String(comp.code).toLowerCase() : undefined,
+          companyName: comp?.name ?? undefined, // <-- expose name to client
           role: m.role,
           roleMode: mode,
           active: comp?.active ?? true,
