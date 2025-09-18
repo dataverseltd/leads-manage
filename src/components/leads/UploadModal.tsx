@@ -94,9 +94,7 @@ export function UploadModal({
       fd.append("folder", "lead-screenshots");
 
       const cloudRes = await fetch(
-        `https://api.cloudinary.com/v1_1/${
-          process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD || "dub59giiq"
-        }/image/upload`,
+        `https://api.cloudinary.com/v1_1/${process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD}/image/upload`,
         { method: "POST", body: fd }
       );
       const cloud = await cloudRes.json();
