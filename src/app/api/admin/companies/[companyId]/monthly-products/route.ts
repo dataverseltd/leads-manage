@@ -2,7 +2,7 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession, type Session } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth-options";
 import { connectDB } from "@/lib/db";
 import Company from "@/models/Company";
 import User from "@/models/User";
@@ -147,23 +147,24 @@ async function listFor(
 /* ---------- Routes ---------- */
 
 // GET -> read list (with optional fallback to latest available month if empty)
+// GET -> read list
 export async function GET(
   req: NextRequest,
-  { params }: { params: { companyId: string } }
+  { params }: { params: Promise<{ companyId: string }> }
 ) {
   try {
+    const { companyId } = await params; // ⬅️ await
     const session = (await getServerSession(authOptions)) as AppSession | null;
     if (!session?.user) return jsonError("Unauthorized", 401);
 
     await connectDB();
     const month = getMonth(req);
 
-    const products = await listFor(params.companyId, month);
+    const products = await listFor(companyId, month);
 
     if (products.length === 0) {
-      // find latest any-month config for this company
       const latest = await CompanyMonthlyProduct.findOne(
-        { companyId: params.companyId },
+        { companyId },
         { month: 1 }
       )
         .sort({ month: -1 })
@@ -171,10 +172,8 @@ export async function GET(
 
       let fallback: { month: string; products: ListedProduct[] } | null = null;
       if (latest?.month && latest.month !== month) {
-        const fp = await listFor(params.companyId, latest.month);
-        if (fp.length) {
-          fallback = { month: latest.month, products: fp };
-        }
+        const fp = await listFor(companyId, latest.month);
+        if (fp.length) fallback = { month: latest.month, products: fp };
       }
 
       return ok({ month, products: [] as ListedProduct[], fallback });
@@ -188,14 +187,15 @@ export async function GET(
   }
 }
 
-// PUT -> replace all products for the month (upsert by name)
+// PUT -> replace all products for the month
 export async function PUT(
   req: NextRequest,
-  { params }: { params: { companyId: string } }
+  { params }: { params: Promise<{ companyId: string }> }
 ) {
   try {
+    const { companyId } = await params; // ⬅️ await
     const session = (await getServerSession(authOptions)) as AppSession | null;
-    await assertCanEditProducts(session, params.companyId);
+    await assertCanEditProducts(session, companyId);
 
     await connectDB();
     const month = getMonth(req);
@@ -209,24 +209,22 @@ export async function PUT(
 
     const names: string[] = isStringArray(body.products) ? body.products : [];
 
-    // Upsert each product by (companyId, month, name)
     for (const rawName of names) {
       const name = String(rawName || "").trim();
       if (!name) continue;
       await CompanyMonthlyProduct.updateOne(
-        { companyId: params.companyId, month, name },
+        { companyId, month, name },
         { $setOnInsert: { name, order: 0, active: true } },
         { upsert: true }
       );
     }
 
-    // Deactivate products that are not in the new list
     await CompanyMonthlyProduct.updateMany(
-      { companyId: params.companyId, month, name: { $nin: names } },
+      { companyId, month, name: { $nin: names } },
       { $set: { active: false } }
     );
 
-    const products = await listFor(params.companyId, month);
+    const products = await listFor(companyId, month);
     return ok({ month, products });
   } catch (e: unknown) {
     const status = (e as WithStatus)?.status ?? 403;
@@ -238,11 +236,12 @@ export async function PUT(
 // POST -> add one product
 export async function POST(
   req: NextRequest,
-  { params }: { params: { companyId: string } }
+  { params }: { params: Promise<{ companyId: string }> }
 ) {
   try {
+    const { companyId } = await params; // ⬅️ await
     const session = (await getServerSession(authOptions)) as AppSession | null;
-    await assertCanEditProducts(session, params.companyId);
+    await assertCanEditProducts(session, companyId);
 
     await connectDB();
     const month = getMonth(req);
@@ -251,14 +250,13 @@ export async function POST(
     const trimmed = String(name || "").trim();
     if (!trimmed) return jsonError("Missing product name", 400);
 
-    // Upsert (keeps id stable if already exists)
     await CompanyMonthlyProduct.updateOne(
-      { companyId: params.companyId, month, name: trimmed },
+      { companyId, month, name: trimmed },
       { $set: { active: true } },
       { upsert: true }
     );
 
-    const products = await listFor(params.companyId, month);
+    const products = await listFor(companyId, month);
     return ok({ month, products });
   } catch (e: unknown) {
     const status = (e as WithStatus)?.status ?? 403;
@@ -270,11 +268,12 @@ export async function POST(
 // DELETE -> remove one product (by id)
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: { companyId: string } }
+  { params }: { params: Promise<{ companyId: string }> }
 ) {
   try {
+    const { companyId } = await params; // ⬅️ await
     const session = (await getServerSession(authOptions)) as AppSession | null;
-    await assertCanEditProducts(session, params.companyId);
+    await assertCanEditProducts(session, companyId);
 
     await connectDB();
     const month = getMonth(req);
@@ -286,11 +285,11 @@ export async function DELETE(
 
     await CompanyMonthlyProduct.deleteOne({
       _id: new mongoose.Types.ObjectId(id),
-      companyId: params.companyId,
+      companyId,
       month,
     });
 
-    const products = await listFor(params.companyId, month);
+    const products = await listFor(companyId, month);
     return ok({ month, products });
   } catch (e: unknown) {
     const status = (e as WithStatus)?.status ?? 403;

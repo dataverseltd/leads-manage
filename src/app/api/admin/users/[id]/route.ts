@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getServerSession, type Session } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth-options";
 
 const SERVER_API = process.env.SERVER_API_URL || "http://127.0.0.1:4000";
 
@@ -11,8 +11,10 @@ const isPlainObject = (v: unknown): v is JsonObject =>
 
 export async function PATCH(
   req: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> } // 👈 make it a Promise
 ) {
+  const { id } = await params; // 👈 await it
+
   const session = (await getServerSession(authOptions)) as AppSession | null;
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -33,7 +35,7 @@ export async function PATCH(
   };
   if (token) headers["x-session-token"] = token;
 
-  const resp = await fetch(`${SERVER_API}/admin/users/${params.id}`, {
+  const resp = await fetch(`${SERVER_API}/admin/users/${id}`, {
     method: "PATCH",
     headers,
     body: JSON.stringify(body),

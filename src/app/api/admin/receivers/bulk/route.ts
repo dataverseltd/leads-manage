@@ -26,8 +26,25 @@ export async function POST(req: NextRequest) {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-  if (userDoc.currentSessionToken)
-    headers["x-session-token"] = String(userDoc.currentSessionToken);
+
+  // Read a token from session or userDoc without widening types to `any`
+  const tokenFromSession = (session as unknown as { sessionToken?: unknown })
+    ?.sessionToken;
+  const tokenFromUser = (
+    userDoc as unknown as { currentSessionToken?: unknown }
+  )?.currentSessionToken;
+
+  const token =
+    (typeof tokenFromSession === "string" && tokenFromSession.trim()
+      ? tokenFromSession
+      : undefined) ??
+    (typeof tokenFromUser === "string" && tokenFromUser.trim()
+      ? tokenFromUser
+      : undefined);
+
+  if (token) {
+    headers["x-session-token"] = token;
+  }
 
   const upstream = await fetch(`${SERVER_API}/api/admin/receivers/bulk`, {
     method: "POST",

@@ -19,11 +19,12 @@ function readCompanyId(body: JsonObject): string | undefined {
   const v = body["companyId"];
   return typeof v === "string" && v.trim() ? v : undefined;
 }
-
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
+  const { id } = await params; // ← await the promise
+
   const qsCompanyId = getCompanyIdFromReq(req); // from ?companyId or header
 
   let bodyUnknown: unknown;
@@ -50,25 +51,20 @@ export async function PATCH(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  // Optional session token if present on your user model
   const maybeToken = (userDoc as unknown as { currentSessionToken?: string })
     ?.currentSessionToken;
   if (maybeToken) headers["x-session-token"] = String(maybeToken);
 
-  // only include companyId if we have one
   const payload: JsonObject = effectiveCompanyId
     ? { ...origBody, companyId: effectiveCompanyId }
     : origBody;
 
-  const upstream = await fetch(
-    `${SERVER_API}/api/admin/receivers/${params.id}`,
-    {
-      method: "PATCH",
-      headers,
-      cache: "no-store",
-      body: JSON.stringify(payload),
-    }
-  );
+  const upstream = await fetch(`${SERVER_API}/api/admin/receivers/${id}`, {
+    method: "PATCH",
+    headers,
+    cache: "no-store",
+    body: JSON.stringify(payload),
+  });
 
   const data = await upstream.json().catch(() => ({}));
   return NextResponse.json(data, { status: upstream.status });

@@ -1,5 +1,7 @@
-import mongoose, { Schema, Types } from "mongoose";
+import mongoose, { Schema, Types, model, models } from "mongoose";
 
+// If you want TS to mirror what Mongo actually stores, prefer Date for createdAt.
+// (Mongoose timestamps always store Date.)
 export interface LeadType {
   fb_id_name: string;
   client_name: string;
@@ -18,18 +20,22 @@ export interface LeadType {
   workingDay: string;
 
   // NEW (optional initially)
-  sourceCompanyId?: Types.ObjectId | null;
-  targetCompanyId?: Types.ObjectId | null;
-  assignedCompanyId?: Types.ObjectId | null;
+  sourceCompanyId?: Types.ObjectId | null; // ref Company
+  targetCompanyId?: Types.ObjectId | null; // ref Company
+  assignedCompanyId?: Types.ObjectId | null; // ref Company
 
-  createdAt?: string | Date;
+  createdAt?: Date; // from timestamps
+  updatedAt?: Date; // from timestamps
 }
 
 const LeadSchema = new Schema<LeadType>(
   {
     fb_id_name: { type: String, trim: true },
     client_name: { type: String, trim: true },
+
+    // `unique: true` already creates an index. Do NOT add a separate schema.index({ number: 1 })
     number: { type: String, unique: true, required: true, trim: true },
+
     rent: { type: String, trim: true },
     house_apt: { type: String, trim: true },
     house_apt_details: { type: String, trim: true },
@@ -62,7 +68,7 @@ const LeadSchema = new Schema<LeadType>(
 
     workingDay: { type: String, required: true, index: true },
 
-    // NEW company fields
+    // company fields
     sourceCompanyId: {
       type: Schema.Types.ObjectId,
       ref: "Company",
@@ -82,21 +88,34 @@ const LeadSchema = new Schema<LeadType>(
       index: true,
     },
   },
-  { timestamps: true, collection: "leads" }
+  {
+    timestamps: true,
+    collection: "leads",
+    // Avoid background index builds in prod hot paths; create via migrations instead.
+    autoIndex: process.env.NODE_ENV !== "production",
+  }
 );
+
+/* ---------- Indexes (no duplicates) ---------- */
 
 // Helpful compounds for dashboards:
 LeadSchema.index({ workingDay: 1, assignedCompanyId: 1 });
 LeadSchema.index({ assignedCompanyId: 1, lead_status: 1, workingDay: 1 });
-LeadSchema.index({ createdAt: -1 });
-// Fast filter + sort combo
+
+// Fast filter + sort combos:
 LeadSchema.index({ assigned_to: 1, workingDay: -1, createdAt: -1 });
-// Speeds up “latest day first” scans
 LeadSchema.index({ workingDay: -1, createdAt: -1, assigned_to: 1 });
-// Optional: lightweight text/regex helpers (avoid full text index unless you need it)
-LeadSchema.index({ number: 1 });
+
+// CreatedAt is useful for “latest first”
+LeadSchema.index({ createdAt: -1 });
+
+// Optional simple field helpers (these are fine; just don't duplicate `number`):
 LeadSchema.index({ address: 1 });
 LeadSchema.index({ fb_id_name: 1 });
 LeadSchema.index({ client_name: 1 });
-// (Keep your existing indexes)
-export default mongoose.models.Lead || mongoose.model("Lead", LeadSchema);
+
+// ❌ DO NOT add: LeadSchema.index({ number: 1 })  ← would duplicate the unique index
+
+// Next.js-safe model export (prevents recompile warnings)
+const Lead = models.Lead || model<LeadType>("Lead", LeadSchema);
+export default Lead;

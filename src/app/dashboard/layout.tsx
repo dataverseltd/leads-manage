@@ -1,7 +1,7 @@
 // ./src/app/dashboard/layout.tsx
 import { getServerSession } from "next-auth";
 import type { Session } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth-options";
 import AppShell from "@/components/AppShell";
 
 type Role =

@@ -3,7 +3,7 @@ export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession, type Session } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { authOptions } from "@/lib/auth-options";
 import { connectDB } from "@/lib/db";
 import Company from "@/models/Company";
 import User from "@/models/User";
@@ -66,12 +66,13 @@ function canEditCompany(userDoc: UserLean | null, companyId: string): boolean {
  * POST -> body { name: string }  (adds a single product if not exists)
  * DELETE -> body { name: string } (removes a single product)
  * PUT  -> body { products: string[] } (replaces the whole list)
- */
+ */ // GET
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { companyId: string } }
+  { params }: { params: Promise<{ companyId: string }> }
 ) {
   try {
+    const { companyId } = await params; // ⬅️ await
     const session = (await getServerSession(authOptions)) as AppSession | null;
     if (!session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -79,7 +80,7 @@ export async function GET(
 
     await connectDB();
 
-    const company = await Company.findById(params.companyId)
+    const company = await Company.findById(companyId)
       .select("products")
       .lean<CompanyLean | null>();
     if (!company) {
@@ -93,11 +94,13 @@ export async function GET(
   }
 }
 
+// POST
 export async function POST(
   req: NextRequest,
-  { params }: { params: { companyId: string } }
+  { params }: { params: Promise<{ companyId: string }> }
 ) {
   try {
+    const { companyId } = await params;
     const session = (await getServerSession(authOptions)) as AppSession | null;
     if (!session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -110,7 +113,7 @@ export async function POST(
       ? await User.findById(userId).lean<UserLean>()
       : null;
 
-    if (!canEditCompany(userDoc, params.companyId)) {
+    if (!canEditCompany(userDoc, companyId)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -127,9 +130,9 @@ export async function POST(
       return NextResponse.json({ error: "Missing name" }, { status: 400 });
     }
 
-    const name = raw.slice(0, 80); // limit length a bit
+    const name = raw.slice(0, 80);
     const updated = await Company.findByIdAndUpdate(
-      params.companyId,
+      companyId,
       { $addToSet: { products: name } },
       { new: true, projection: { products: 1 } }
     ).lean<CompanyLean | null>();
@@ -144,11 +147,13 @@ export async function POST(
   }
 }
 
+// DELETE
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: { companyId: string } }
+  { params }: { params: Promise<{ companyId: string }> }
 ) {
   try {
+    const { companyId } = await params;
     const session = (await getServerSession(authOptions)) as AppSession | null;
     if (!session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -161,7 +166,7 @@ export async function DELETE(
       ? await User.findById(userId).lean<UserLean>()
       : null;
 
-    if (!canEditCompany(userDoc, params.companyId)) {
+    if (!canEditCompany(userDoc, companyId)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -178,7 +183,7 @@ export async function DELETE(
     }
 
     const updated = await Company.findByIdAndUpdate(
-      params.companyId,
+      companyId,
       { $pull: { products: raw } },
       { new: true, projection: { products: 1 } }
     ).lean<CompanyLean | null>();
@@ -193,11 +198,13 @@ export async function DELETE(
   }
 }
 
+// PUT
 export async function PUT(
   req: NextRequest,
-  { params }: { params: { companyId: string } }
+  { params }: { params: Promise<{ companyId: string }> }
 ) {
   try {
+    const { companyId } = await params;
     const session = (await getServerSession(authOptions)) as AppSession | null;
     if (!session?.user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -210,7 +217,7 @@ export async function PUT(
       ? await User.findById(userId).lean<UserLean>()
       : null;
 
-    if (!canEditCompany(userDoc, params.companyId)) {
+    if (!canEditCompany(userDoc, companyId)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -229,7 +236,7 @@ export async function PUT(
       .map((s) => s.slice(0, 80));
 
     const updated = await Company.findByIdAndUpdate(
-      params.companyId,
+      companyId,
       { $set: { products } },
       { new: true, projection: { products: 1 } }
     ).lean<CompanyLean | null>();
