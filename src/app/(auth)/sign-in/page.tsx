@@ -60,7 +60,7 @@ export default function SignIn() {
               />
             </div>
             <h1 className="mt-6 text-3xl font-semibold tracking-tight">
-              Lead & FB ID Portal
+              Dataverse LTD
             </h1>
             <p className="mt-2 max-w-md text-sm opacity-80">
               Streamlined distribution, realtime screenshots, and single-device

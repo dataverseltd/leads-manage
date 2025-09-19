@@ -22,6 +22,7 @@ import {
   GitBranch,
   UserPlus,
   Building2,
+  Blocks,
 } from "lucide-react";
 
 /* ---------- Types ---------- */
@@ -366,12 +367,12 @@ export function AppShell({
         badge: myLeadsBadge,
       },
       { label: "Upload Lead", href: "/dashboard/leads/upload", icon: Upload },
+      { label: "All Leads", href: "/dashboard/admin/leads", icon: Blocks },
       {
         label: "Screenshots",
         href: "/dashboard/admin/screenshots",
         icon: FileImage,
       },
-      // { label: "Analytics", href: "/dashboard/analytics", icon: BarChart },
     ],
   };
   const hasSignupSummary = memberships.some(

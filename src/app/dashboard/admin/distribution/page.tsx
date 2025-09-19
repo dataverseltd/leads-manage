@@ -56,7 +56,11 @@ type TodayPayload = {
     activatedAt?: string | null;
     updatedAt?: string | null;
   };
-  metrics: { pendingToday: number; assignedTodayByReceiver: AssignedRow[] };
+  metrics: {
+    pendingToday: number;
+    assignedToday: number; // <-- NEW
+    assignedTodayByReceiver: AssignedRow[];
+  };
   receivers: Receiver[];
   companyMode?: "uploader" | "receiver" | "hybrid";
 };
@@ -111,6 +115,7 @@ export default function DistributionAdminPage() {
   const [serverCompanyMode, setServerCompanyMode] = useState<
     "uploader" | "receiver" | "hybrid" | null
   >(null);
+  const [totalAssigned, setTotalAssigned] = useState<number>(0); // <-- NEW
 
   // filters
   const [q, setQ] = useState("");
@@ -205,6 +210,17 @@ export default function DistributionAdminPage() {
       setAssignedRows(data.metrics?.assignedTodayByReceiver || []);
       setReceivers(Array.isArray(data.receivers) ? data.receivers : []);
       setServerCompanyMode(data.companyMode ?? null);
+      // Prefer server’s authoritative total; fallback to sum if missing
+      const serverTotal = Number(data.metrics?.assignedToday ?? NaN);
+      if (Number.isFinite(serverTotal)) {
+        setTotalAssigned(serverTotal);
+      } else {
+        const sum = (data.metrics?.assignedTodayByReceiver || []).reduce(
+          (acc, r) => acc + (r?.count || 0),
+          0
+        );
+        setTotalAssigned(sum);
+      }
 
       setError(null);
     } catch (e: unknown) {
@@ -244,11 +260,11 @@ export default function DistributionAdminPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive, companyId, pageRestricted]);
 
-  // ---- Derived ----
-  const totalAssigned = useMemo(
-    () => assignedRows.reduce((sum, r) => sum + (r?.count || 0), 0),
-    [assignedRows]
-  );
+  // // ---- Derived ----
+  // const totalAssigned = useMemo(
+  //   () => assignedRows.reduce((sum, r) => sum + (r?.count || 0), 0),
+  //   [assignedRows]
+  // );
 
   const maxAssigned = useMemo(
     () => Math.max(1, ...assignedRows.map((r) => r.count)),
