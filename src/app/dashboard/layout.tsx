@@ -24,7 +24,7 @@ type CustomSession = Session & {
   memberships?: Array<{
     companyId: string;
     companyCode?: string | null;
-    companyName?: string | null; // <-- now present from auth-options
+    companyName?: string | null;
     role: string;
     roleMode: "uploader" | "receiver" | "hybrid";
     canUploadLeads: boolean;
@@ -58,7 +58,6 @@ export default async function DashboardLayout({
   const session = (await getServerSession(authOptions)) as CustomSession | null;
 
   const roleRaw: Role = (session?.role ?? "") as Role;
-  // normalize employee -> lead_operator if needed in your AppShell
   const role = roleRaw === "employee" ? ("lead_operator" as const) : roleRaw;
 
   const caps = capsFromActive(session);
@@ -71,7 +70,7 @@ export default async function DashboardLayout({
   const memberships =
     session?.memberships?.map((m) => ({
       companyId: m.companyId,
-      companyName: m.companyName ?? "Company", // <-- comes from DB now
+      companyName: m.companyName ?? "Company",
       roleMode: m.roleMode,
       isPrimary: m.companyId === session?.activeCompanyId,
     })) ?? [];
@@ -85,6 +84,12 @@ export default async function DashboardLayout({
       memberships={memberships}
     >
       <div className="mx-auto container py-10">{children}</div>
+
+      {/* Credit Footer */}
+      <footer className="mt-10 border-t border-gray-200 dark:border-neutral-800 py-4 text-center text-xs text-gray-500 dark:text-gray-400">
+        © {new Date().getFullYear()} DataVerse Dashboard. Built with ❤️ by
+        Sabbir.
+      </footer>
     </AppShell>
   );
 }

@@ -100,7 +100,6 @@ export function Sidebar({
     return localStorage.getItem(SIDEBAR_LS_KEY) === "1";
   });
   const [open, setOpen] = useState(false);
-
   useEffect(() => {
     if (typeof window === "undefined") return;
     localStorage.setItem(SIDEBAR_LS_KEY, collapsed ? "1" : "0");
@@ -367,11 +366,24 @@ export function AppShell({
         badge: myLeadsBadge,
       },
       { label: "Upload Lead", href: "/dashboard/leads/upload", icon: Upload },
-      { label: "Screenshots", href: "/dashboard/screenshots", icon: FileImage },
-      { label: "Analytics", href: "/dashboard/analytics", icon: BarChart2 },
+      {
+        label: "Screenshots",
+        href: "/dashboard/admin/screenshots",
+        icon: FileImage,
+      },
+      // { label: "Analytics", href: "/dashboard/analytics", icon: BarChart },
     ],
   };
-
+  const hasSignupSummary = memberships.some(
+    (m) => m.roleMode === "receiver" || m.roleMode === "hybrid"
+  );
+  if (hasSignupSummary) {
+    overview.items.push({
+      label: "Signup Summary",
+      href: "/dashboard/signup-summary",
+      icon: BarChart2, // you can pick a different icon if you want
+    });
+  }
   /* ---------- Admin section (dynamic) ---------- */
   const adminSection: NavSection = {
     heading: "Admin",
@@ -500,18 +512,25 @@ export function AppShell({
     }
 
     if (roleMode === "receiver") {
-      // receiver company → only My Leads
+      // receiver company → My Leads + Signup Summary
       const sections: NavSection[] = [
         {
           heading: "Leads",
           items: [
             { label: "My Leads", href: "/dashboard/my-leads", icon: Users },
+            {
+              label: "Signup Summary",
+              href: "/dashboard/signup-summary",
+              icon: BarChart2,
+            },
           ],
         },
       ];
+
       return renderLayout(sections, { name: "User", role: "lead_operator" });
     }
 
+    //
     // hybrid → normal overview, but if they canReceive we hide Upload Lead
     const filteredOverview: NavSection = {
       ...overview,

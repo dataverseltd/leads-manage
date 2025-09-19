@@ -8,6 +8,7 @@ import mongoose, { Types } from "mongoose";
 import Screenshot from "@/models/Screenshot";
 import CompanyMonthlyProduct from "@/models/CompanyMonthlyProduct";
 import Lead from "@/models/Lead";
+import Ably from "ably";
 
 type AppSession = Session & { userId?: string };
 
@@ -30,6 +31,24 @@ type PostBody = {
   productId?: string;
   workingDay?: string;
 };
+
+// Minimal interface for Ably channels we call `publish` on
+type PublishableChannel = {
+  publish: (
+    name: string,
+    data: unknown,
+    callback: (err?: unknown) => void
+  ) => void;
+};
+
+// Promise wrapper for Ably publish
+const publish = (ch: PublishableChannel, name: string, data: unknown) =>
+  new Promise<void>((resolve, reject) => {
+    ch.publish(name, data, (err?: unknown) => (err ? reject(err) : resolve()));
+  });
+
+const withTimeout = (p: Promise<void>, ms = 5000) =>
+  Promise.race([p, new Promise<void>((resolve) => setTimeout(resolve, ms))]);
 
 const ok = <T>(data: T, status = 200) => NextResponse.json(data, { status });
 const err = (message: string, status = 400) =>
@@ -119,14 +138,91 @@ export async function POST(req: NextRequest) {
       product: String(productDoc.name).trim(),
     });
 
-    return ok(
-      {
-        _id: String(created._id),
-        productName: productDoc.name,
-        productMonth: productDoc.month,
-      },
-      201
-    );
+    // immediate HTTP response (so UI is never stuck on "Uploading…")
+    const respBody = {
+      _id: String(created._id),
+      productName: productDoc.name,
+      productMonth: productDoc.month,
+    };
+    const response = ok(respBody, 201);
+
+    // —— Ably publish (fire-and-forget, never block the response) ——
+    (async () => {
+      try {
+        const ablyKey = process.env.ABLY_API_KEY;
+        if (!ablyKey) {
+          console.warn(
+            "[screenshots/upload] Skipping Ably publish: no ABLY_API_KEY in apps/web env"
+          );
+          return;
+        }
+
+        const rest = new Ably.Rest({ key: ablyKey });
+
+        const payload = {
+          _id: String(created._id),
+          lead: String(created.lead),
+          url: created.url,
+          productId: String(created.productId),
+          productName: created.productName,
+          productMonth: created.productMonth, // "YYYY-MM"
+          workingDay: created.workingDay, // "YYYY-MM-DD"
+          uploadedAt: created.uploadedAt,
+          uploadedBy: created.uploadedBy ? String(created.uploadedBy) : null,
+          companyId: created.companyId ? String(created.companyId) : null,
+          reviewed: !!created.reviewed,
+        };
+
+        const companyIdStr = payload.companyId || "unknown";
+        const chAll = rest.channels.get(
+          `companies.${companyIdStr}.screenshots`
+        ) as unknown as PublishableChannel;
+        const chDay = rest.channels.get(
+          `companies.${companyIdStr}.screenshots.${payload.workingDay}`
+        ) as unknown as PublishableChannel;
+
+        await Promise.allSettled([
+          withTimeout(publish(chAll, "uploaded", payload), 5000),
+          withTimeout(publish(chDay, "uploaded", payload), 5000),
+        ]);
+      } catch (e) {
+        console.warn("[screenshots/upload] Ably publish failed (bg):", e);
+      }
+    })();
+    (async () => {
+      try {
+        const SERVER_API = (
+          process.env.SERVER_API_URL || "http://127.0.0.1:4000"
+        ).replace("localhost", "127.0.0.1");
+        const SECRET = process.env.PUSH_BROADCAST_SECRET; // same value as server
+        if (!SERVER_API || !SECRET) return;
+
+        const payload = {
+          companyId: String(created.companyId),
+          title: "New Signup Screenshot",
+          body: created.productName,
+          data: {
+            type: "screenshot.uploaded",
+            productName: created.productName,
+            workingDay: created.workingDay,
+            screenshotId: String(created._id),
+            url: "/dashboard/signup-summary",
+          },
+        };
+
+        // Don’t await; keep it non-blocking
+        fetch(`${SERVER_API}/api/push/broadcast/screenshot`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-push-secret": SECRET,
+          },
+          body: JSON.stringify(payload),
+          keepalive: true, // hint for node/fetch to allow after response
+        }).catch(() => {});
+      } catch {} // swallow
+    })();
+    return response;
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : "Server error";
     return err(message, 500);
