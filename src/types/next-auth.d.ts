@@ -18,5 +18,6 @@ declare module "next-auth" {
     };
     activeCompanyId?: string;
     sessionToken?: string;
+    roleMode?: "uploader" | "receiver" | "hybrid";
   }
 }
