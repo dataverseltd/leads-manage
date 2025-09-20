@@ -41,11 +41,23 @@ type SortKey =
   | "total"
   | "approved"
   | "assigned"
-  | "working"
-  | "pending"
   | "rejected";
 
+type NumericKey = Extract<
+  SortKey,
+  "total" | "approved" | "assigned" | "rejected"
+>;
+type StringKey = Extract<SortKey, "name" | "employeeId">;
+
 /* ---------------- Helpers ---------------- */
+function isNumericKey(k: SortKey): k is NumericKey {
+  return (
+    k === "total" || k === "approved" || k === "assigned" || k === "rejected"
+  );
+}
+function isStringKey(k: SortKey): k is StringKey {
+  return k === "name" || k === "employeeId";
+}
 function cn(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(" ");
 }
@@ -143,13 +155,23 @@ export default function AdminReceiverLeadSummaryPage() {
   // reflect key filters in URL (nice for refresh/share)
   useEffect(() => {
     const sp = new URLSearchParams(params.toString());
-    companyId ? sp.set("companyId", companyId) : sp.delete("companyId");
-    selectedDay ? sp.set("day", selectedDay) : sp.delete("day");
+
+    if (companyId) sp.set("companyId", companyId);
+    else sp.delete("companyId");
+
+    if (selectedDay) sp.set("day", selectedDay);
+    else sp.delete("day");
+
     sp.set("mode", viewMode);
-    q ? sp.set("q", q) : sp.delete("q");
+
+    if (q) sp.set("q", q);
+    else sp.delete("q");
+
     sp.set("sortKey", sortKey);
     sp.set("sortDir", sortDir);
+
     router.replace(`?${sp.toString()}`);
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companyId, selectedDay, viewMode, q, sortKey, sortDir]);
 
@@ -306,7 +328,8 @@ export default function AdminReceiverLeadSummaryPage() {
 
   const filtered = useMemo(() => {
     const s = debouncedQ.trim().toLowerCase();
-    let rows = s
+
+    const rows = s
       ? data.filter(
           (r) =>
             r.name?.toLowerCase().includes(s) ||
@@ -317,16 +340,19 @@ export default function AdminReceiverLeadSummaryPage() {
 
     rows.sort((a, b) => {
       const dir = sortDir === "asc" ? 1 : -1;
-      if (sortKey === "name" || sortKey === "employeeId") {
-        const av = String((a as any)[sortKey] || "");
-        const bv = String((b as any)[sortKey] || "");
+
+      if (isStringKey(sortKey)) {
+        const av = (a[sortKey] ?? "") as string;
+        const bv = (b[sortKey] ?? "") as string;
         return av.localeCompare(bv) * dir;
-      } else {
-        const av = Number((a as any)[sortKey] || 0);
-        const bv = Number((b as any)[sortKey] || 0);
-        return (av - bv) * dir;
       }
+
+      // numeric keys
+      const av = (a[sortKey] ?? 0) as number;
+      const bv = (b[sortKey] ?? 0) as number;
+      return (av - bv) * dir;
     });
+
     return rows;
   }, [data, debouncedQ, sortKey, sortDir]);
 

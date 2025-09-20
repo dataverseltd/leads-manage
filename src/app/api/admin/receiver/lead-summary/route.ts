@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession, type Session } from "next-auth";
 import { authOptions } from "@/lib/auth-options";
 import { connectDB } from "@/lib/db";
-import mongoose, { PipelineStage, Types } from "mongoose";
+import { PipelineStage, Types } from "mongoose"; // ✅ remove default mongoose import
 import Lead from "@/models/Lead";
 import User from "@/models/User";
 
@@ -14,6 +14,20 @@ type AppSession = Session & {
     companyId: string;
     roleMode?: "uploader" | "receiver" | "hybrid";
   }>;
+};
+
+// Shape of each row returned by the pipeline
+type SummaryRow = {
+  userId: Types.ObjectId | null;
+  name: string;
+  email?: string;
+  employeeId?: string;
+  total: number;
+  approved: number;
+  pending: number;
+  rejected: number;
+  working: number;
+  assigned: number;
 };
 
 export async function GET(req: NextRequest) {
@@ -57,13 +71,13 @@ export async function GET(req: NextRequest) {
 
   await connectDB();
 
-  // Keep typing loose here to satisfy PipelineStage.Match
-  const match: Record<string, any> = {
+  // ✅ Strongly type $match without 'any'
+  const match: { assignedCompanyId: Types.ObjectId; workingDay?: string } = {
     assignedCompanyId: new Types.ObjectId(companyId),
   };
   if (day) match.workingDay = day;
 
-  // ✅ Explicitly type the pipeline
+  // ✅ Explicit pipeline typing
   const pipeline: PipelineStage[] = [
     { $match: match },
     {
@@ -89,7 +103,7 @@ export async function GET(req: NextRequest) {
     },
     {
       $lookup: {
-        from: User.collection.name, // string
+        from: User.collection.name,
         localField: "_id",
         foreignField: "_id",
         as: "user",
@@ -114,7 +128,7 @@ export async function GET(req: NextRequest) {
     { $sort: { total: -1, name: 1 } },
   ];
 
-  // Cast pipeline type (already correct) and run
-  const summary = await (Lead as any).aggregate(pipeline as PipelineStage[]);
+  // ✅ No 'any' cast; also get typed rows back
+  const summary = await Lead.aggregate<SummaryRow>(pipeline);
   return NextResponse.json({ success: true, summary });
 }
