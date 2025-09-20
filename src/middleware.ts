@@ -34,7 +34,7 @@ const BLOCKED_ADMIN_ROLES: Role[] = [
 ];
 
 export async function middleware(req: NextRequest) {
-  const { pathname } = req.nextUrl;
+  const { pathname, search } = req.nextUrl;
 
   // Skip static/public
   if (
@@ -54,44 +54,53 @@ export async function middleware(req: NextRequest) {
 
   if (!token) {
     const signInUrl = new URL("/sign-in", req.url);
-    signInUrl.searchParams.set("callbackUrl", pathname);
+    // Preserve full callback (path + query)
+    const callback = `${pathname}${search || ""}`;
+    signInUrl.searchParams.set("callbackUrl", callback);
     return NextResponse.redirect(signInUrl);
   }
 
   const role = token.role;
   const memberships = token.memberships || [];
+  const isAdmin = role === "admin" || role === "superadmin";
+  const hasReceiverCompany = memberships.some(
+    (m) => m.active && (m.roleMode === "receiver" || m.roleMode === "hybrid")
+  );
+
+  const isAdminArea = pathname.startsWith("/dashboard/admin");
+  const isReceiverSummaryPage = pathname.startsWith(
+    "/dashboard/admin/receiver-lead-summary"
+  );
 
   /* ---------- Rule 1: Superadmin → full access ---------- */
   if (role === "superadmin") return NextResponse.next();
 
-  /* ---------- Rule 2: Multiple memberships w/ receiver company → allow ---------- */
-  if (
-    memberships.length > 1 &&
-    memberships.some((m) => m.roleMode === "receiver")
-  ) {
+  /* ---------- Rule 2: Guard the new Receiver Lead Summary page ---------- */
+  if (isReceiverSummaryPage) {
+    // Only admins/superadmins who have any receiver/hybrid membership
+    if (!isAdmin || !hasReceiverCompany) {
+      return NextResponse.redirect(new URL("/unauthorize", req.url));
+    }
     return NextResponse.next();
   }
 
   /* ---------- Rule 3: Blocked roles from any /dashboard/admin/* ---------- */
-  if (
-    pathname.startsWith("/dashboard/admin") &&
-    role &&
-    BLOCKED_ADMIN_ROLES.includes(role)
-  ) {
+  if (isAdminArea && role && BLOCKED_ADMIN_ROLES.includes(role)) {
     return NextResponse.redirect(new URL("/unauthorize", req.url));
   }
 
   /* ---------- Rule 4: Single-membership uploader-only admin restriction ---------- */
   const isSingleMembershipUploaderOnly =
     memberships.length === 1 && memberships[0]?.roleMode === "uploader";
+
   if (isSingleMembershipUploaderOnly && role === "admin") {
-    // Only block the three specific pages
-    const restrictedPages = [
+    // Keep your existing targeted blocks
+    const restrictedPages = new Set([
       "/dashboard/admin/screenshots",
       "/dashboard/signup-summary",
       "/dashboard/admin/distribution",
-    ];
-    if (restrictedPages.includes(pathname)) {
+    ]);
+    if (restrictedPages.has(pathname)) {
       return NextResponse.redirect(new URL("/unauthorize", req.url));
     }
   }

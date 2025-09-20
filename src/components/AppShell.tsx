@@ -378,6 +378,13 @@ export function AppShell({
   const hasSignupSummary = memberships.some(
     (m) => m.roleMode === "receiver" || m.roleMode === "hybrid"
   );
+  const hasReceiverOrHybrid = memberships.some(
+    (m) => m.roleMode === "receiver" || m.roleMode === "hybrid"
+  );
+  const isUploaderOnlyAdmin =
+    memberships.length > 0 &&
+    memberships.every((m) => m.roleMode === "uploader");
+
   if (hasSignupSummary) {
     overview.items.push({
       label: "Signup Summary",
@@ -385,6 +392,7 @@ export function AppShell({
       icon: BarChart2, // you can pick a different icon if you want
     });
   }
+
   /* ---------- Admin section (dynamic) ---------- */
   const adminSection: NavSection = {
     heading: "Admin",
@@ -424,22 +432,66 @@ export function AppShell({
   };
 
   /* ---------- SUPERADMIN ---------- */
+  /* ---------- SUPERADMIN ---------- */
   if (role === "superadmin") {
-    // Hide My Leads & Upload Lead for superadmin
-    const superOverview: NavSection = {
-      ...overview,
-      items: overview.items.filter(
-        (i) =>
-          i.href !== "/dashboard/my-leads" &&
-          i.href !== "/dashboard/leads/upload"
-      ),
+    // Base sections we’ll fill conditionally
+    const sections: NavSection[] = [];
+    const adminItems: NavItem[] = [];
+
+    if (isUploaderOnlyAdmin) {
+      // Uploader-only superadmin -> only All Leads + Employees/New
+      sections.push({
+        heading: "Overview",
+        items: [
+          { label: "All Leads", href: "/dashboard/admin/leads", icon: Blocks },
+        ],
+      });
+
+      adminItems.push({
+        label: "Employees / New",
+        href: "/dashboard/admin/employees/new",
+        icon: UserPlus,
+      });
+
+      if (adminItems.length) {
+        sections.push({ heading: "Admin", items: adminItems });
+      }
+
+      // No System/Settings (per “nothing else”)
+      return renderLayout(sections, {
+        name: "Super Admin",
+        role: "superadmin",
+      });
+    }
+
+    // Receiver/Hybrid in memberships -> full set
+    const overviewFull: NavSection = {
+      heading: "Overview",
+      items: [
+        { label: "All Leads", href: "/dashboard/admin/leads", icon: Blocks },
+        {
+          label: "Screenshots",
+          href: "/dashboard/admin/screenshots",
+          icon: FileImage,
+        },
+        {
+          label: "Signup Summary",
+          href: "/dashboard/signup-summary",
+          icon: BarChart2,
+        },
+      ],
     };
 
-    adminSection.items.push(
+    adminItems.push(
       {
         label: "Distribution",
         href: "/dashboard/admin/distribution",
         icon: GitBranch,
+      },
+      {
+        label: "Receiver Lead Summary",
+        href: "/dashboard/admin/receiver-lead-summary",
+        icon: BarChart2,
       },
       {
         label: "Employees / New",
@@ -448,39 +500,85 @@ export function AppShell({
       }
     );
 
-    const sections: NavSection[] = [
-      superOverview,
-      adminSection,
-      {
-        heading: "System",
-        items: [
-          { label: "Settings", href: "/dashboard/settings", icon: Settings },
-        ],
-      },
-    ];
+    sections.push(overviewFull);
+    sections.push({ heading: "Admin", items: adminItems });
+    sections.push({
+      heading: "System",
+      items: [
+        { label: "Settings", href: "/dashboard/settings", icon: Settings },
+      ],
+    });
 
-    // If single-company superadmin: we still show company badge (handled by singleCompanyName)
-    // If multi-company superadmin (memberships.length > 1): same sections; just no special restrictions beyond hiding MyLeads/UploadLead.
     return renderLayout(sections, { name: "Super Admin", role: "superadmin" });
   }
 
   /* ---------- ADMIN ---------- */
+  /* ---------- ADMIN ---------- */
   if (role === "admin") {
-    if (canDist)
-      adminSection.items.push({
-        label: "Distribution",
-        href: "/dashboard/admin/distribution",
-        icon: GitBranch,
+    const sections: NavSection[] = [];
+    const adminItems: NavItem[] = [];
+
+    if (isUploaderOnlyAdmin) {
+      // Uploader-only admin -> only All Leads + Employees/New
+      sections.push({
+        heading: "Overview",
+        items: [
+          { label: "All Leads", href: "/dashboard/admin/leads", icon: Blocks },
+        ],
       });
-    if (canCreateUser)
-      adminSection.items.push({
+
+      adminItems.push({
         label: "Employees / New",
         href: "/dashboard/admin/employees/new",
         icon: UserPlus,
       });
 
-    const sections: NavSection[] = [overview];
-    if (adminSection.items.length) sections.push(adminSection);
+      if (adminItems.length) {
+        sections.push({ heading: "Admin", items: adminItems });
+      }
+
+      // No System/Settings (per “nothing else”)
+      return renderLayout(sections, { name: "Admin", role: "admin" });
+    }
+
+    // Receiver/Hybrid admin -> full set (visibility; page guards still enforce perms)
+    const overviewFull: NavSection = {
+      heading: "Overview",
+      items: [
+        { label: "All Leads", href: "/dashboard/admin/leads", icon: Blocks },
+        {
+          label: "Screenshots",
+          href: "/dashboard/admin/screenshots",
+          icon: FileImage,
+        },
+        {
+          label: "Signup Summary",
+          href: "/dashboard/signup-summary",
+          icon: BarChart2,
+        },
+      ],
+    };
+
+    adminItems.push(
+      {
+        label: "Distribution",
+        href: "/dashboard/admin/distribution",
+        icon: GitBranch,
+      },
+      {
+        label: "Receiver Lead Summary",
+        href: "/dashboard/admin/receiver-lead-summary",
+        icon: BarChart2,
+      },
+      {
+        label: "Employees / New",
+        href: "/dashboard/admin/employees/new",
+        icon: UserPlus,
+      }
+    );
+
+    sections.push(overviewFull);
+    sections.push({ heading: "Admin", items: adminItems });
     sections.push({
       heading: "System",
       items: [
