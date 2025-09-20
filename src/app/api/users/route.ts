@@ -9,7 +9,9 @@ import { authOptions } from "@/lib/auth-options";
 const SERVER_API = process.env.SERVER_API_URL || "http://localhost:4000";
 
 type AppSession = Session & {
-  sessionToken?: string;
+  userId?: string;
+  role?: string;
+  activeCompanyId?: string;
   memberships?: Array<{ role?: string }>;
 };
 
@@ -17,12 +19,38 @@ type JsonObject = Record<string, unknown>;
 const isPlainObject = (v: unknown): v is JsonObject =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
-function getCompanyId(req: Request): string | undefined {
+function getCompanyId(
+  req: Request,
+  session: AppSession | null
+): string | undefined {
   const url = new URL(req.url);
   return (
     url.searchParams.get("companyId") ||
     req.headers.get("x-company-id") ||
+    session?.activeCompanyId ||
     undefined
+  );
+}
+
+// Parse a cookie value from the raw Cookie header
+function getCookieFromHeader(req: Request, name: string): string | undefined {
+  const raw = req.headers.get("cookie") || "";
+  // split by ;, trim, and match name=
+  for (const part of raw.split(";")) {
+    const [k, ...rest] = part.trim().split("=");
+    if (decodeURIComponent(k) === name) {
+      return decodeURIComponent(rest.join("="));
+    }
+  }
+  return undefined;
+}
+
+// Read the real NextAuth session token (dev vs prod names)
+function readSessionTokenFromRequest(req: Request): string {
+  return (
+    getCookieFromHeader(req, "__Secure-next-auth.session-token") ??
+    getCookieFromHeader(req, "next-auth.session-token") ??
+    ""
   );
 }
 
@@ -49,7 +77,6 @@ type CreateUserPayloadOut = {
   };
 };
 
-// (optional) allow-list the fields we forward
 function pickCreateUserPayload(src: unknown): CreateUserPayloadOut {
   const out: CreateUserPayloadOut = {};
   if (!isPlainObject(src)) return out;
@@ -60,7 +87,6 @@ function pickCreateUserPayload(src: unknown): CreateUserPayloadOut {
   if (typeof src.password === "string") out.password = src.password;
   if (typeof src.role === "string") out.role = src.role;
 
-  // caps: { canUploadLeads, canReceiveLeads, can_distribute_leads, can_distribute_fbids, can_create_user }
   if (isPlainObject(src.caps)) {
     const caps = src.caps as JsonObject;
     out.caps = {
@@ -71,7 +97,6 @@ function pickCreateUserPayload(src: unknown): CreateUserPayloadOut {
       can_create_user: !!caps.can_create_user,
     };
   }
-
   return out;
 }
 
@@ -82,15 +107,7 @@ export async function POST(req: Request) {
   }
 
   const bodyUnknown = await readBody(req);
-  const companyId = getCompanyId(req);
-  const sessionToken = session.sessionToken;
-
-  if (!sessionToken) {
-    return NextResponse.json(
-      { error: "Unauthorized: missing sessionToken" },
-      { status: 401 }
-    );
-  }
+  const companyId = getCompanyId(req, session);
   if (!companyId) {
     return NextResponse.json(
       { error: "companyId is required" },
@@ -98,7 +115,7 @@ export async function POST(req: Request) {
     );
   }
 
-  // 🚫 Never trust body.companyId — ignore it to prevent cross-company creation
+  // Block cross-company creation attempts via body
   if (
     isPlainObject(bodyUnknown) &&
     typeof bodyUnknown.companyId === "string" &&
@@ -110,7 +127,7 @@ export async function POST(req: Request) {
     );
   }
 
-  // (optional) second-layer role guard on the edge (server also should enforce)
+  // Optional role guard (server should also enforce)
   const isSuperadmin =
     Array.isArray(session.memberships) &&
     session.memberships.some((m) => m?.role === "superadmin");
@@ -129,12 +146,18 @@ export async function POST(req: Request) {
 
   const forwardBody = pickCreateUserPayload(bodyUnknown);
 
+  // ✅ Real NextAuth cookie token from request
+  const sessionToken = readSessionTokenFromRequest(req);
+
   const resp = await fetch(`${SERVER_API}/api/users`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-session-token": sessionToken,
-      "x-company-id": companyId, // <-- authoritative company scope
+      "x-session-token": sessionToken, // authenticateJWT/sessionAuth path
+      "x-company-id": companyId, // membership scope
+      "x-user-id": session.userId || "", // proxyUser fast-path
+      "x-role": session.role || "",
+      "x-debug-id": `users-create-${Date.now()}`,
     },
     body: JSON.stringify(forwardBody),
   });

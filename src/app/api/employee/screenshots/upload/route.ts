@@ -1,3 +1,4 @@
+// apps/web/src/app/api/employee/screenshots/upload/route.ts
 export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
@@ -10,7 +11,8 @@ import CompanyMonthlyProduct from "@/models/CompanyMonthlyProduct";
 import Lead from "@/models/Lead";
 import Ably from "ably";
 
-type AppSession = Session & { userId?: string };
+/* ---------------- Types ---------------- */
+type AppSession = Session & { userId?: string | null };
 
 type LeadLean = {
   _id: Types.ObjectId;
@@ -29,26 +31,11 @@ type PostBody = {
   leadId?: string;
   url?: string;
   productId?: string;
-  workingDay?: string;
+  workingDay?: string; // "YYYY-MM-DD"
 };
 
-// Minimal interface for Ably channels we call `publish` on
-type PublishableChannel = {
-  publish: (
-    name: string,
-    data: unknown,
-    callback: (err?: unknown) => void
-  ) => void;
-};
-
-// Promise wrapper for Ably publish
-const publish = (ch: PublishableChannel, name: string, data: unknown) =>
-  new Promise<void>((resolve, reject) => {
-    ch.publish(name, data, (err?: unknown) => (err ? reject(err) : resolve()));
-  });
-
-const withTimeout = (p: Promise<void>, ms = 5000) =>
-  Promise.race([p, new Promise<void>((resolve) => setTimeout(resolve, ms))]);
+/* ---------------- Utils ---------------- */
+const RE_WORKING_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 const ok = <T>(data: T, status = 200) => NextResponse.json(data, { status });
 const err = (message: string, status = 400) =>
@@ -57,6 +44,38 @@ const err = (message: string, status = 400) =>
 const isObjectIdString = (v: unknown): v is string =>
   typeof v === "string" && mongoose.Types.ObjectId.isValid(v);
 
+const toObjectId = (v: string) => new mongoose.Types.ObjectId(v);
+
+/** Minimal interface for Ably channels we call `publish` on */
+type Publishable = {
+  publish: (name: string, data: unknown, cb: (e?: unknown) => void) => void;
+};
+
+const publish = (ch: Publishable, name: string, data: unknown) =>
+  new Promise<void>((resolve, reject) => {
+    ch.publish(name, data, (err?: unknown) => (err ? reject(err) : resolve()));
+  });
+
+const withTimeout = (p: Promise<void>, ms = 5000) =>
+  Promise.race([
+    p,
+    new Promise<void>((resolve) => setTimeout(resolve, ms)),
+  ]) as Promise<void>;
+
+/** Fire-and-forget helper (never throw into the main request) */
+function fireAndForget(fn: () => Promise<unknown>) {
+  // eslint-disable-next-line @typescript-eslint/no-floating-promises
+  (async () => {
+    try {
+      await fn();
+    } catch (e) {
+      // Intentionally swallowed; log for diagnostics only
+      console.warn("[screenshots/upload bg-task]", e);
+    }
+  })();
+}
+
+/* ---------------- Route ---------------- */
 /**
  * POST /api/employee/screenshots/upload
  * body: { leadId: string, url: string, productId: string, workingDay: "YYYY-MM-DD" }
@@ -66,26 +85,26 @@ export async function POST(req: NextRequest) {
     const session = (await getServerSession(authOptions)) as AppSession | null;
     if (!session?.user) return err("Unauthorized", 401);
 
-    let body: PostBody;
+    let body: PostBody = {};
     try {
       body = (await req.json()) as PostBody;
     } catch {
-      body = {};
+      /* no-op: body stays {} */
     }
+
     const { leadId, url, productId, workingDay } = body;
 
+    // Input validation (fast-fail without touching DB)
     if (!isObjectIdString(leadId)) return err("Invalid leadId", 400);
     if (!isObjectIdString(productId)) return err("Invalid productId", 400);
     if (typeof url !== "string" || !url.trim()) return err("Invalid url", 400);
-    if (
-      typeof workingDay !== "string" ||
-      !/^\d{4}-\d{2}-\d{2}$/.test(workingDay)
-    ) {
+    if (typeof workingDay !== "string" || !RE_WORKING_DAY.test(workingDay)) {
       return err("Invalid workingDay", 400);
     }
 
     await connectDB();
 
+    // Load lead (assigned company is source of truth for company scope)
     const lead = await Lead.findById(leadId).lean<LeadLean | null>();
     if (!lead) return err("Lead not found", 404);
 
@@ -93,18 +112,19 @@ export async function POST(req: NextRequest) {
     if (!assignedCompanyId || !isObjectIdString(String(assignedCompanyId))) {
       return err("Lead has no assignedCompanyId", 400);
     }
-    const companyId = new mongoose.Types.ObjectId(String(assignedCompanyId));
+    const companyId = toObjectId(String(assignedCompanyId));
 
+    // Validate product belongs to same company & month
     const productDoc = await CompanyMonthlyProduct.findById(
       productId
     ).lean<ProductLean | null>();
     if (!productDoc) return err("Product not found", 404);
     if (productDoc.active === false) return err("Product is inactive", 400);
 
-    const dayMonth = workingDay.slice(0, 7); // "YYYY-MM"
-    if (productDoc.month !== dayMonth) {
+    const monthFromDay = workingDay.slice(0, 7); // "YYYY-MM"
+    if (productDoc.month !== monthFromDay) {
       return err(
-        `Product belongs to ${productDoc.month}, but workingDay is ${dayMonth}`,
+        `Product belongs to ${productDoc.month}, but workingDay is ${monthFromDay}`,
         400
       );
     }
@@ -112,25 +132,25 @@ export async function POST(req: NextRequest) {
       return err("Product and lead belong to different companies", 403);
     }
 
-    const sessionUserId = session.userId;
+    // UploadedBy from session (optional)
     const uploadedBy =
-      typeof sessionUserId === "string" &&
-      mongoose.Types.ObjectId.isValid(sessionUserId)
-        ? new mongoose.Types.ObjectId(sessionUserId)
-        : null;
+      typeof session.userId === "string" &&
+      mongoose.Types.ObjectId.isValid(session.userId)
+        ? toObjectId(session.userId)
+        : undefined;
 
-    // Create screenshot
+    // Create screenshot (DB is authoritative)
     const created = await Screenshot.create({
-      lead: new mongoose.Types.ObjectId(leadId),
+      lead: toObjectId(leadId),
       url: url.trim(),
-      uploadedBy,
+      uploadedBy: uploadedBy ?? null,
       uploadedAt: new Date(),
       workingDay,
       reviewed: false,
       companyId,
 
       // required schema fields:
-      productId: new mongoose.Types.ObjectId(productDoc._id),
+      productId: toObjectId(String(productDoc._id)),
       productName: String(productDoc.name).trim(),
       productMonth: productDoc.month,
 
@@ -138,90 +158,102 @@ export async function POST(req: NextRequest) {
       product: String(productDoc.name).trim(),
     });
 
-    // immediate HTTP response (so UI is never stuck on "Uploading…")
-    const respBody = {
+    // Build a minimal response for the caller (don’t expose internals)
+    const responsePayload = {
       _id: String(created._id),
-      productName: productDoc.name,
-      productMonth: productDoc.month,
+      productName: created.productName,
+      productMonth: created.productMonth,
+      workingDay: created.workingDay,
+      url: created.url,
     };
-    const response = ok(respBody, 201);
 
-    // —— Ably publish (fire-and-forget, never block the response) ——
-    (async () => {
-      try {
-        const ablyKey = process.env.ABLY_API_KEY;
-        if (!ablyKey) {
-          console.warn(
-            "[screenshots/upload] Skipping Ably publish: no ABLY_API_KEY in apps/web env"
-          );
-          return;
-        }
+    // Send HTTP response immediately — do not await background work
+    const response = ok(responsePayload, 201);
 
-        const rest = new Ably.Rest({ key: ablyKey });
+    /* ---------- Background tasks (non-blocking) ---------- */
 
-        const payload = {
-          _id: String(created._id),
-          lead: String(created.lead),
-          url: created.url,
-          productId: String(created.productId),
-          productName: created.productName,
-          productMonth: created.productMonth, // "YYYY-MM"
-          workingDay: created.workingDay, // "YYYY-MM-DD"
-          uploadedAt: created.uploadedAt,
-          uploadedBy: created.uploadedBy ? String(created.uploadedBy) : null,
-          companyId: created.companyId ? String(created.companyId) : null,
-          reviewed: !!created.reviewed,
-        };
-
-        const companyIdStr = payload.companyId || "unknown";
-        const chAll = rest.channels.get(
-          `companies.${companyIdStr}.screenshots`
-        ) as unknown as PublishableChannel;
-        const chDay = rest.channels.get(
-          `companies.${companyIdStr}.screenshots.${payload.workingDay}`
-        ) as unknown as PublishableChannel;
-
-        await Promise.allSettled([
-          withTimeout(publish(chAll, "uploaded", payload), 5000),
-          withTimeout(publish(chDay, "uploaded", payload), 5000),
-        ]);
-      } catch (e) {
-        console.warn("[screenshots/upload] Ably publish failed (bg):", e);
+    // 1) Ably publishes (company streams + day stream)
+    fireAndForget(async () => {
+      const ablyKey = process.env.ABLY_API_KEY;
+      if (!ablyKey) {
+        console.warn(
+          "[screenshots/upload] Ably publish skipped: no ABLY_API_KEY"
+        );
+        return;
       }
-    })();
-    (async () => {
+      const rest = new Ably.Rest({ key: ablyKey });
+
+      const payload = {
+        _id: String(created._id),
+        lead: String(created.lead),
+        url: created.url,
+        productId: String(created.productId),
+        productName: created.productName,
+        productMonth: created.productMonth, // "YYYY-MM"
+        workingDay: created.workingDay, // "YYYY-MM-DD"
+        uploadedAt: created.uploadedAt,
+        uploadedBy: created.uploadedBy ? String(created.uploadedBy) : null,
+        companyId: created.companyId ? String(created.companyId) : null,
+        reviewed: !!created.reviewed,
+      };
+
+      const cid = payload.companyId || "unknown";
+      const chAll = rest.channels.get(
+        `companies.${cid}.screenshots`
+      ) as unknown as Publishable;
+      const chDay = rest.channels.get(
+        `companies.${cid}.screenshots.${payload.workingDay}`
+      ) as unknown as Publishable;
+
+      await Promise.allSettled([
+        withTimeout(publish(chAll, "uploaded", payload), 5000),
+        withTimeout(publish(chDay, "uploaded", payload), 5000),
+      ]);
+    });
+
+    // 2) Push broadcast (server endpoint) — fire-and-forget
+    fireAndForget(async () => {
+      const rawServer = process.env.SERVER_API_URL || "http://127.0.0.1:4000";
+      const SECRET = process.env.PUSH_BROADCAST_SECRET;
+      if (!SECRET) return;
+
+      // make localhost→127.0.0.1 substitution (avoids some Node DNS oddities)
+      const SERVER_API = rawServer.replace("localhost", "127.0.0.1");
+
+      const payload = {
+        companyId: String(created.companyId),
+        title: "New Signup Screenshot",
+        body: created.productName,
+        data: {
+          type: "screenshot.uploaded",
+          productName: created.productName,
+          workingDay: created.workingDay,
+          screenshotId: String(created._id),
+          url: "/dashboard/signup-summary",
+        },
+      };
+
+      // Use AbortController to avoid hanging resources
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 6000);
+
       try {
-        const SERVER_API = (
-          process.env.SERVER_API_URL || "http://127.0.0.1:4000"
-        ).replace("localhost", "127.0.0.1");
-        const SECRET = process.env.PUSH_BROADCAST_SECRET; // same value as server
-        if (!SERVER_API || !SECRET) return;
-
-        const payload = {
-          companyId: String(created.companyId),
-          title: "New Signup Screenshot",
-          body: created.productName,
-          data: {
-            type: "screenshot.uploaded",
-            productName: created.productName,
-            workingDay: created.workingDay,
-            screenshotId: String(created._id),
-            url: "/dashboard/signup-summary",
-          },
-        };
-
-        // Don’t await; keep it non-blocking
-        fetch(`${SERVER_API}/api/push/broadcast/screenshot`, {
+        await fetch(`${SERVER_API}/api/push/broadcast/screenshot`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             "x-push-secret": SECRET,
           },
           body: JSON.stringify(payload),
-          keepalive: true, // hint for node/fetch to allow after response
-        }).catch(() => {});
-      } catch {} // swallow
-    })();
+          signal: ctrl.signal,
+          // keepalive is best-effort; still add abort protection above
+          keepalive: true,
+        });
+      } finally {
+        clearTimeout(t);
+      }
+    });
+
     return response;
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : "Server error";
