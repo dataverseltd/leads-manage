@@ -1,12 +1,15 @@
-"use client";
+// src/app/unauthorize/page.tsx
+export const dynamic = "force-dynamic"; // avoid static pre-render
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { ShieldX, ArrowLeft, Building2, LogOut, Info } from "lucide-react";
+import { ShieldX, ArrowLeft, LogOut, Info } from "lucide-react";
 
-export default function UnauthorizePage() {
-  const q = useSearchParams();
-  const reason = q.get("reason") || "";
+export default function UnauthorizePage({
+  searchParams,
+}: {
+  searchParams?: { reason?: string };
+}) {
+  const reason = searchParams?.reason || "";
 
   const reasonText =
     reason === "admin-only"
@@ -55,7 +58,6 @@ export default function UnauthorizePage() {
               {reasonText}
             </p>
 
-            {/* helper box */}
             <div
               className="
                 mt-5 rounded-xl border bg-neutral-50 px-4 py-4 text-sm
@@ -88,7 +90,6 @@ export default function UnauthorizePage() {
               </ul>
             </div>
 
-            {/* actions */}
             <div className="mt-6 flex flex-wrap items-center gap-3">
               <Link
                 href="/dashboard"
@@ -102,9 +103,6 @@ export default function UnauthorizePage() {
                 Back to Dashboard
               </Link>
 
-             
-
-              {/* Optional Sign out */}
               <Link
                 href="/sign-in"
                 className="
@@ -118,7 +116,6 @@ export default function UnauthorizePage() {
               </Link>
             </div>
 
-            {/* tiny footer */}
             <p className="mt-6 text-xs text-neutral-500 dark:text-neutral-500">
               If you believe this is an error, contact your system administrator
               with a screenshot of this page.
