@@ -1,15 +1,18 @@
 // src/app/unauthorize/page.tsx
-export const dynamic = "force-dynamic"; // avoid static pre-render
+export const dynamic = "force-dynamic";
 
 import Link from "next/link";
 import { ShieldX, ArrowLeft, LogOut, Info } from "lucide-react";
 
-export default function UnauthorizePage({
+type SP = { reason?: string };
+
+export default async function UnauthorizePage({
   searchParams,
 }: {
-  searchParams?: { reason?: string };
+  searchParams?: Promise<SP>;
 }) {
-  const reason = searchParams?.reason || "";
+  const sp = (await searchParams) ?? {};
+  const reason = sp.reason ?? "";
 
   const reasonText =
     reason === "admin-only"
