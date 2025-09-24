@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useSession } from "next-auth/react";
+import type { Session } from "next-auth";
 import Link from "next/link";
 import {
   FiAward,
@@ -13,8 +14,6 @@ import {
   FiChevronRight,
   FiSearch,
   FiSliders,
-  FiCopy,
-  FiCheck,
   FiRefreshCw,
 } from "react-icons/fi";
 import Papa from "papaparse";
@@ -28,6 +27,7 @@ import {
   LinearScale,
   Tooltip,
   Legend,
+  type ChartOptions,
 } from "chart.js";
 import dayjs from "dayjs";
 
@@ -52,11 +52,19 @@ type ApiResponse = {
   availableStatuses: string[];
   leaders: Leader[];
 };
+type ExtendedUser = Session["user"] & {
+  employee_id?: string;
+  employeeId?: string;
+};
+type MySession = Session & { user?: ExtendedUser };
+
 
 const STATUS_ORDER = ["approved", "in_progress", "assigned", "pending", "rejected"] as const;
 
 export default function UploaderDashboardPage() {
-  const { data: session } = useSession();
+  const { data } = useSession(); // no generic here
+    const session = (data || {}) as MySession;
+
   const [leaders, setLeaders] = useState<Leader[]>([]);
   const [availableStatuses, setAvailableStatuses] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -71,12 +79,9 @@ export default function UploaderDashboardPage() {
   const [query, setQuery] = useState("");
   const [density, setDensity] = useState<"normal" | "compact">("normal");
 
-  // Copy feedback
-  const [copiedKey, setCopiedKey] = useState<string>("");
-
-  // highlight current user
+  // highlight current user (no any)
   const currentEmployeeId =
-    (session as any)?.user?.employee_id || (session as any)?.user?.employeeId;
+    session.user?.employee_id ?? session.user?.employeeId ?? "";
 
   const fetchLeaders = useCallback(async () => {
     setLoading(true);
@@ -101,7 +106,7 @@ export default function UploaderDashboardPage() {
       setLeaders(data.leaders || []);
       setAvailableStatuses(data.availableStatuses || []);
       setPeriodLabel(data.period || "");
-    } catch (e) {
+    } catch {
       setFetchError("Network error");
       setLeaders([]);
       setAvailableStatuses([]);
@@ -125,7 +130,10 @@ export default function UploaderDashboardPage() {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return leaders.filter((l) => {
-      const nameHit = !q || l.name?.toLowerCase().includes(q) || l.employee_id?.toLowerCase().includes(q);
+      const nameHit =
+        !q ||
+        l.name?.toLowerCase().includes(q) ||
+        l.employee_id?.toLowerCase().includes(q);
       const statusHit =
         activeStatuses.length === 0 ||
         activeStatuses.some((s) => (l.statuses?.[s] ?? 0) > 0);
@@ -136,7 +144,8 @@ export default function UploaderDashboardPage() {
   // KPI cards
   const kpi = useMemo(() => {
     const total = filtered.reduce((a, b) => a + (b.totalLeads || 0), 0);
-    const sumBy = (key: string) => filtered.reduce((a, b) => a + Number(b.statuses?.[key] || 0), 0);
+    const sumBy = (key: string) =>
+      filtered.reduce((a, b) => a + Number(b.statuses?.[key] || 0), 0);
     return {
       total,
       approved: sumBy("approved"),
@@ -162,7 +171,9 @@ export default function UploaderDashboardPage() {
       "#22C55E", // green
     ];
     const map: Record<string, string> = {};
-    const base = availableStatuses.length ? availableStatuses : STATUS_ORDER as unknown as string[];
+    const base = availableStatuses.length
+      ? availableStatuses
+      : (STATUS_ORDER as unknown as string[]);
     base.forEach((s, i) => (map[s] = defaults[i % defaults.length]));
     return map;
   }, [availableStatuses]);
@@ -177,31 +188,39 @@ export default function UploaderDashboardPage() {
   }));
 
   const chartData = { labels: chartLabels, datasets: stackedDatasets };
-  const chartOptions = {
+
+  const chartOptions: ChartOptions<"bar"> = {
     responsive: true,
     scales: {
-      x: { stacked: true, ticks: { color: getCssVar("--color-chart-text") } },
+      x: {
+        stacked: true,
+        ticks: { color: getCssVar("--color-chart-text") || "#64748B" },
+      },
       y: {
         beginAtZero: true,
         stacked: true,
-        ticks: { stepSize: 1, color: getCssVar("--color-chart-text") },
-        grid: { color: getCssVar("--color-chart-grid") },
+        ticks: {
+          stepSize: 1,
+          color: getCssVar("--color-chart-text") || "#64748B",
+        },
+        grid: { color: getCssVar("--color-chart-grid") || "#E5E7EB" },
       },
     },
     plugins: {
       legend: {
         display: true,
-        position: "bottom" as const,
-        labels: { color: getCssVar("--color-chart-text") },
+        position: "bottom",
+        labels: { color: getCssVar("--color-chart-text") || "#64748B" },
       },
-      tooltip: { mode: "index" as const, intersect: false },
+      tooltip: { mode: "index", intersect: false },
     },
   };
 
   function getCssVar(name: string) {
-    // Read CSS var from document root (works across themes)
     if (typeof window === "undefined") return undefined;
-    return getComputedStyle(document.documentElement).getPropertyValue(name) || undefined;
+    return (
+      getComputedStyle(document.documentElement).getPropertyValue(name) || undefined
+    );
   }
 
   // Export CSV (filtered)
@@ -226,19 +245,13 @@ export default function UploaderDashboardPage() {
     );
   };
 
-  const copy = async (txt: string, key: string) => {
-    try {
-      await navigator.clipboard.writeText(txt);
-      setCopiedKey(key);
-      setTimeout(() => setCopiedKey(""), 1200);
-    } catch {}
-  };
-
   const myIndex = filtered.findIndex((u) => u.employee_id === currentEmployeeId);
   const tableRef = useRef<HTMLTableElement | null>(null);
   const jumpToMe = () => {
     if (myIndex < 0 || !tableRef.current) return;
-    const row = tableRef.current.querySelectorAll("tbody tr")[myIndex] as HTMLElement | undefined;
+    const row = tableRef.current.querySelectorAll("tbody tr")[
+      myIndex
+    ] as HTMLElement | undefined;
     row?.scrollIntoView({ behavior: "smooth", block: "center" });
     row?.classList.add("ring-2", "ring-emerald-400");
     setTimeout(() => row?.classList.remove("ring-2", "ring-emerald-400"), 1200);
@@ -246,8 +259,10 @@ export default function UploaderDashboardPage() {
 
   // UI helpers
   const ChangeIcon = ({ change }: { change?: Leader["positionChange"] }) => {
-    if (change === "up") return <FiChevronUp className="text-emerald-600 dark:text-emerald-400" />;
-    if (change === "down") return <FiChevronDown className="text-red-600 dark:text-red-400" />;
+    if (change === "up")
+      return <FiChevronUp className="text-emerald-600 dark:text-emerald-400" />;
+    if (change === "down")
+      return <FiChevronDown className="text-red-600 dark:text-red-400" />;
     if (change === "new")
       return (
         <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300">
@@ -279,7 +294,9 @@ export default function UploaderDashboardPage() {
           <div className="flex flex-wrap items-center gap-2">
             {/* Range */}
             <div className="flex items-center gap-2">
-              <label className="sr-only" htmlFor="range">Range</label>
+              <label className="sr-only" htmlFor="range">
+                Range
+              </label>
               <select
                 id="range"
                 value={range}
@@ -302,7 +319,12 @@ export default function UploaderDashboardPage() {
                       const [y, m] = selectedMonth.split("-").map(Number);
                       const d = new Date(y, m - 1, 1);
                       d.setMonth(d.getMonth() - 1);
-                      setSelectedMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+                      setSelectedMonth(
+                        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(
+                          2,
+                          "0"
+                        )}`
+                      );
                     }}
                     className="inline-flex h-9 items-center justify-center rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 hover:bg-slate-50 dark:hover:bg-slate-800"
                     aria-label="Previous month"
@@ -325,7 +347,12 @@ export default function UploaderDashboardPage() {
                       const [y, m] = selectedMonth.split("-").map(Number);
                       const d = new Date(y, m - 1, 1);
                       d.setMonth(d.getMonth() + 1);
-                      setSelectedMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+                      setSelectedMonth(
+                        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(
+                          2,
+                          "0"
+                        )}`
+                      );
                     }}
                     className="inline-flex h-9 items-center justify-center rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 hover:bg-slate-50 dark:hover:bg-slate-800"
                     aria-label="Next month"
@@ -352,7 +379,9 @@ export default function UploaderDashboardPage() {
 
             {/* Density */}
             <button
-              onClick={() => setDensity((d) => (d === "normal" ? "compact" : "normal"))}
+              onClick={() =>
+                setDensity((d) => (d === "normal" ? "compact" : "normal"))
+              }
               className="inline-flex h-9 items-center gap-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 text-sm text-slate-900 dark:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-800"
               aria-label="Toggle row density"
               title="Toggle row density"
@@ -393,15 +422,14 @@ export default function UploaderDashboardPage() {
               <button
                 key={s}
                 onClick={() =>
-                  setActiveStatuses((prev) =>
-                    on ? prev.filter((x) => x !== s) : [...prev, s]
-                  )
+                  setActiveStatuses((prev) => (on ? prev.filter((x) => x !== s) : [...prev, s]))
                 }
                 className={`px-3 h-8 rounded-full text-sm border transition
-                ${on
+                ${
+                  on
                     ? "bg-blue-600 text-white border-blue-600"
                     : "bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200 border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800"
-                  }`}
+                }`}
                 aria-pressed={on}
               >
                 {labelize(s)}
@@ -454,7 +482,7 @@ export default function UploaderDashboardPage() {
           Top 10 Uploaders (Stacked by Status)
         </h2>
         <div className="h-72">
-          {loading ? <ChartSkeleton /> : <Bar data={chartData} options={chartOptions as any} />}
+          {loading ? <ChartSkeleton /> : <Bar data={chartData} options={chartOptions} />}
         </div>
       </div>
 
@@ -478,10 +506,7 @@ export default function UploaderDashboardPage() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table
-              ref={tableRef}
-              className="w-full text-sm"
-            >
+            <table ref={tableRef} className="w-full text-sm">
               <thead className=" z-10 bg-white/90 dark:bg-slate-900/90 backdrop-blur border-b border-slate-200 dark:border-slate-800 text-left text-slate-700 dark:text-slate-300">
                 <tr>
                   <Th>#</Th>
@@ -499,7 +524,6 @@ export default function UploaderDashboardPage() {
                 {filtered.map((u, idx) => {
                   const isCurrent = u.employee_id === currentEmployeeId;
                   const percent = Math.round((u.totalLeads / maxTotal) * 100);
-                  const key = `${u.employee_id}-copy`;
 
                   return (
                     <motion.tr
@@ -509,7 +533,11 @@ export default function UploaderDashboardPage() {
                       animate={{ opacity: 1, scale: 1 }}
                       transition={{ type: "spring", stiffness: 300, damping: 22 }}
                       className={`border-t border-slate-200 dark:border-slate-800 transition
-                        ${isCurrent ? "bg-emerald-50/60 dark:bg-emerald-900/20" : "hover:bg-slate-50/60 dark:hover:bg-slate-800/40"}
+                        ${
+                          isCurrent
+                            ? "bg-emerald-50/60 dark:bg-emerald-900/20"
+                            : "hover:bg-slate-50/60 dark:hover:bg-slate-800/40"
+                        }
                       `}
                     >
                       <Td className={rowPad}>
@@ -529,7 +557,6 @@ export default function UploaderDashboardPage() {
 
                       <Td className={`${rowPad} flex items-center gap-2`}>
                         <span className="font-mono">{u.employee_id}</span>
-                      
                       </Td>
 
                       {showStatuses.map((s) => (
@@ -541,9 +568,7 @@ export default function UploaderDashboardPage() {
                       <Td className={`${rowPad} font-semibold text-blue-700 dark:text-blue-300`}>
                         {u.totalLeads}
                       </Td>
-                      <Td className={rowPad}>
-                        {percent}%
-                      </Td>
+                      <Td className={rowPad}>{percent}%</Td>
                       <Td className={rowPad}>
                         <ChangeIcon change={u.positionChange} />
                       </Td>
@@ -566,11 +591,7 @@ function labelize(s: string) {
 }
 
 function Th({ children }: { children: React.ReactNode }) {
-  return (
-    <th className="px-4 py-2 font-semibold">
-      {children}
-    </th>
-  );
+  return <th className="px-4 py-2 font-semibold">{children}</th>;
 }
 
 function Td({
@@ -580,9 +601,7 @@ function Td({
   children: React.ReactNode;
   className?: string;
 }) {
-  return (
-    <td className={`px-4 ${className}`}>{children}</td>
-  );
+  return <td className={`px-4 ${className}`}>{children}</td>;
 }
 
 function Stat({
@@ -595,12 +614,17 @@ function Stat({
   accent?: "emerald" | "violet" | "cyan" | "amber" | "red";
 }) {
   const color =
-    accent === "emerald" ? "text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200/70 dark:border-emerald-800" :
-    accent === "violet" ? "text-violet-700 dark:text-violet-300 bg-violet-50 dark:bg-violet-900/20 border-violet-200/70 dark:border-violet-800" :
-    accent === "cyan" ? "text-cyan-700 dark:text-cyan-300 bg-cyan-50 dark:bg-cyan-900/20 border-cyan-200/70 dark:border-cyan-800" :
-    accent === "amber" ? "text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 border-amber-200/70 dark:border-amber-800" :
-    accent === "red" ? "text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-900/20 border-red-200/70 dark:border-red-800" :
-    "text-slate-800 dark:text-slate-200 bg-white dark:bg-slate-900 border-slate-200/70 dark:border-slate-800";
+    accent === "emerald"
+      ? "text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200/70 dark:border-emerald-800"
+      : accent === "violet"
+      ? "text-violet-700 dark:text-violet-300 bg-violet-50 dark:bg-violet-900/20 border-violet-200/70 dark:border-violet-800"
+      : accent === "cyan"
+      ? "text-cyan-700 dark:text-cyan-300 bg-cyan-50 dark:bg-cyan-900/20 border-cyan-200/70 dark:border-cyan-800"
+      : accent === "amber"
+      ? "text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 border-amber-200/70 dark:border-amber-800"
+      : accent === "red"
+      ? "text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-900/20 border-red-200/70 dark:border-red-800"
+      : "text-slate-800 dark:text-slate-200 bg-white dark:bg-slate-900 border-slate-200/70 dark:border-slate-800";
 
   return (
     <div className={`rounded-xl border p-3 shadow-sm ${color}`}>
@@ -611,9 +635,7 @@ function Stat({
 }
 
 function ChartSkeleton() {
-  return (
-    <div className="h-full w-full animate-pulse rounded-md bg-slate-200/60 dark:bg-slate-800/60" />
-  );
+  return <div className="h-full w-full animate-pulse rounded-md bg-slate-200/60 dark:bg-slate-800/60" />;
 }
 
 function TableSkeleton() {
@@ -622,10 +644,7 @@ function TableSkeleton() {
       {Array.from({ length: 8 }).map((_, i) => (
         <div key={i} className="grid grid-cols-8 md:grid-cols-12 gap-3 px-4 py-3">
           {Array.from({ length: 12 }).map((__, j) => (
-            <div
-              key={j}
-              className="h-4 rounded bg-slate-200/70 dark:bg-slate-800/70"
-            />
+            <div key={j} className="h-4 rounded bg-slate-200/70 dark:bg-slate-800/70" />
           ))}
         </div>
       ))}

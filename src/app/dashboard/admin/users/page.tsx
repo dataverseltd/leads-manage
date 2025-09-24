@@ -56,6 +56,24 @@ type UserRow = {
   createdAt?: string;
 };
 
+type UsersEnvelope = { users: UserRow[] };
+
+// —— helper: safe error message extraction (no-any) ——
+function getErrorMessage(err: unknown, fallback = "Operation failed"): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "object" && err && "message" in err) {
+    const m = (err as { message?: unknown }).message;
+    if (typeof m === "string") return m;
+  }
+  return fallback;
+}
+// lightweight type guards
+function isObj(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+function apiErrorOf(v: unknown): string | null {
+  return isObj(v) && typeof v.error === "string" ? v.error : null;
+}
 export default function AdminUsersPage() {
   const { data } = useSession();
   const session = (data || {}) as AppSession;
@@ -107,14 +125,21 @@ export default function AdminUsersPage() {
       if (search) qs.set("search", search);
       if (companyId) qs.set("companyId", companyId);
 
-      const resp = await fetch(`/api/users?${qs.toString()}`, {
-        cache: "no-store",
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data?.error || "Failed to load");
-      setUsers(Array.isArray(data?.users) ? data.users : data);
-    } catch (e: any) {
-      setError(e?.message || "Failed to load");
+     const resp = await fetch(`/api/users?${qs.toString()}`, { cache: "no-store" });
+
+const payload: unknown = await resp.json();
+if (!resp.ok) {
+  throw new Error(apiErrorOf(payload) ?? "Failed to load");
+}
+
+const list: UserRow[] = Array.isArray(payload)
+  ? (payload as UserRow[])
+  : ((payload as UsersEnvelope).users ?? []);
+
+setUsers(list);
+
+    } catch (e: unknown) {
+      setError(getErrorMessage(e, "Failed to load"));
       setUsers([]);
     } finally {
       setLoading(false);
@@ -124,49 +149,53 @@ export default function AdminUsersPage() {
   useEffect(() => {
     fetchUsers();
   }, [fetchUsers]);
-const onDelete = async () => {
-  if (!deleteId) return;
-  setDeleting(true);
-  try {
-    const resp = await fetch(`/api/users?id=${deleteId}`, {
-      method: "DELETE",
-    });
-    const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) throw new Error(data?.error || "Delete failed");
-    setDeleteId(null);
-    await fetchUsers();
-  } catch (e: any) {
-    alert(e?.message || "Delete failed");
-  } finally {
-    setDeleting(false);
-  }
-};
 
-const onSavePassword = async () => {
-  if (!pwdForId) return;
-  if (newPassword.trim().length < 6) {
-    setPwdErr("Password must be at least 6 characters.");
-    return;
-  }
-  setPwdSaving(true);
-  setPwdErr("");
-  try {
+  const onDelete = async () => {
+    if (!deleteId) return;
+    setDeleting(true);
+    try {
+    const resp = await fetch(`/api/users?id=${deleteId}`, { method: "DELETE" });
+const payload: unknown = await resp.json().catch(() => ({}));
+if (!resp.ok) {
+  throw new Error(apiErrorOf(payload) ?? "Delete failed");
+}
+
+      setDeleteId(null);
+      await fetchUsers();
+    } catch (e: unknown) {
+      alert(getErrorMessage(e, "Delete failed"));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const onSavePassword = async () => {
+    if (!pwdForId) return;
+    if (newPassword.trim().length < 6) {
+      setPwdErr("Password must be at least 6 characters.");
+      return;
+    }
+    setPwdSaving(true);
+    setPwdErr("");
+    try {
     const resp = await fetch(`/api/users?id=${pwdForId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password: newPassword }),
-    });
-    const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) throw new Error(data?.error || "Update failed");
-    setPwdForId(null);
-    setNewPassword("");
-  } catch (e: any) {
-    setPwdErr(e?.message || "Update failed");
-  } finally {
-    setPwdSaving(false);
-  }
-};
+  method: "PATCH",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ password: newPassword }),
+});
+const payload: unknown = await resp.json().catch(() => ({}));
+if (!resp.ok) {
+  throw new Error(apiErrorOf(payload) ?? "Update failed");
+}
 
+      setPwdForId(null);
+      setNewPassword("");
+    } catch (e: unknown) {
+      setPwdErr(getErrorMessage(e, "Update failed"));
+    } finally {
+      setPwdSaving(false);
+    }
+  };
 
   return (
     <div className="p-6 min-h-screen bg-white dark:bg-slate-950">
@@ -285,11 +314,7 @@ const onSavePassword = async () => {
                       ? new Date(u.lastLoginAt).toLocaleString()
                       : "—"}
                   </Td>
-                  <Td>
-                    {u.lastKnownIP
-                      ? u.lastKnownIP
-                      : "—"}
-                  </Td>
+                  <Td>{u.lastKnownIP ? u.lastKnownIP : "—"}</Td>
                   <Td className="text-right">
                     <div className="flex justify-end gap-2">
                       <button
@@ -387,7 +412,13 @@ function Th({ children }: { children: React.ReactNode }) {
   return <th className="px-4 py-2 font-semibold">{children}</th>;
 }
 
-function Td({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+function Td({
+  children,
+  className = "",
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
   return <td className={`px-4 py-2 ${className}`}>{children}</td>;
 }
 
