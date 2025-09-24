@@ -23,6 +23,7 @@ import {
   UserPlus,
   Building2,
   Blocks,
+  UsersIcon,
 } from "lucide-react";
 
 /* ---------- Types ---------- */
@@ -432,7 +433,6 @@ export function AppShell({
   };
 
   /* ---------- SUPERADMIN ---------- */
-  /* ---------- SUPERADMIN ---------- */
   if (role === "superadmin") {
     // Base sections we’ll fill conditionally
     const sections: NavSection[] = [];
@@ -443,6 +443,7 @@ export function AppShell({
       sections.push({
         heading: "Overview",
         items: [
+          { label: "Dashboard", href: "/dashboard/uploader", icon: LayoutDashboard },
           { label: "All Leads", href: "/dashboard/admin/leads", icon: Blocks },
         ],
       });
@@ -451,6 +452,11 @@ export function AppShell({
         label: "Employees / New",
         href: "/dashboard/admin/employees/new",
         icon: UserPlus,
+      },
+     {
+        label: "Manage Users",
+        href: "/dashboard/admin/users",
+        icon: UsersIcon,
       });
 
       if (adminItems.length) {
@@ -497,6 +503,11 @@ export function AppShell({
         label: "Employees / New",
         href: "/dashboard/admin/employees/new",
         icon: UserPlus,
+      },
+      {
+        label: "Manage Users",
+        href: "/dashboard/admin/users",
+        icon: UsersIcon,
       }
     );
 
@@ -513,7 +524,6 @@ export function AppShell({
   }
 
   /* ---------- ADMIN ---------- */
-  /* ---------- ADMIN ---------- */
   if (role === "admin") {
     const sections: NavSection[] = [];
     const adminItems: NavItem[] = [];
@@ -523,6 +533,7 @@ export function AppShell({
       sections.push({
         heading: "Overview",
         items: [
+          { label: "Dashboard", href: "/dashboard/uploader", icon: LayoutDashboard },
           { label: "All Leads", href: "/dashboard/admin/leads", icon: Blocks },
         ],
       });
@@ -531,6 +542,11 @@ export function AppShell({
         label: "Employees / New",
         href: "/dashboard/admin/employees/new",
         icon: UserPlus,
+      },
+     {
+        label: "Manage Users",
+        href: "/dashboard/admin/users",
+        icon: UsersIcon,
       });
 
       if (adminItems.length) {
@@ -599,6 +615,11 @@ export function AppShell({
         {
           heading: "Leads",
           items: [
+            {
+              label: "Dashboard",
+              href: "/dashboard/uploader",
+              icon: LayoutDashboard,
+            },
             {
               label: "Upload Lead",
               href: "/dashboard/leads/upload",
