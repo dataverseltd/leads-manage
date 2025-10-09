@@ -260,8 +260,8 @@ if (!resp.ok) {
       </div>
 
       {/* Table */}
-      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 shadow-sm overflow-hidden">
-        <table className="w-full text-sm">
+      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 shadow-sm overflow-x-auto">
+        <table className="w-full text-sm ">
           <thead className="bg-slate-50/70 dark:bg-slate-800/70 text-left text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800">
             <tr>
               <Th>Name</Th>

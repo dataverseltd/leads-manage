@@ -24,6 +24,7 @@ import {
   Building2,
   Blocks,
   UsersIcon,
+  Repeat,
 } from "lucide-react";
 
 /* ---------- Types ---------- */
@@ -508,6 +509,11 @@ export function AppShell({
         label: "Manage Users",
         href: "/dashboard/admin/users",
         icon: UsersIcon,
+      },
+      {
+        label: "Transfer Leads",
+        href: "/dashboard/admin/lead-transfer",
+        icon: Repeat,
       }
     );
 

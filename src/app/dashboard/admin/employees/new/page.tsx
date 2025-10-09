@@ -23,8 +23,13 @@ type Caps = {
   can_create_user: boolean;
 };
 
-type Company = { _id: string; name: string; code?: string; active?: boolean };
-
+type Company = {
+  _id: string;
+  name: string;
+  code?: string;
+  active?: boolean;
+  roleMode?: "uploader" | "receiver" | "hybrid";
+};
 type MembershipRole =
   | "superadmin"
   | "admin"
@@ -60,34 +65,22 @@ const BASE_ROLES = [
  * - B (Dataverse): If role=lead_operator -> only "Can Receive Leads" = TRUE, others FALSE (hide others).
  *   Also restrict visible roles to ["lead_operator", "admin", "superadmin"].
  */
+// --- Policies ---------------------------------------------------------------
+
+// DELETE the old getCompanyPolicy() entirely and ADD this:
 function getCompanyPolicy(company?: Company) {
-  if (!company) {
-    return {
-      restrictRoles: null as string[] | null,
-      forceLOOnlyReceive: false,
-      hideReceiveForAll: false,
-    };
-  }
-  if (company.code === "A") {
-    return {
-      restrictRoles: null,
-      forceLOOnlyReceive: false,
-      hideReceiveForAll: true,
-    };
-  }
-  if (company.code === "B") {
-    return {
-      restrictRoles: ["lead_operator", "admin", "superadmin"],
-      forceLOOnlyReceive: true,
-      hideReceiveForAll: false,
-    };
-  }
+  const roleMode = company?.roleMode ?? "hybrid";
+  // We expose two precise flags:
+  // - forceLOOnlyUpload: for lead_operator in uploader-mode companies
+  // - forceLOOnlyReceive: for lead_operator in receiver-mode companies
   return {
-    restrictRoles: null,
-    forceLOOnlyReceive: false,
-    hideReceiveForAll: false,
+    roleMode,
+    forceLOOnlyUpload: roleMode === "uploader",
+    forceLOOnlyReceive: roleMode === "receiver",
+    // no global hide here; hybrid stays flexible
   };
 }
+
 
 /** Role defaults (admin/superadmin are management-only; upload/receive always false) */
 function roleDefaultCaps(role: string): Caps {
@@ -156,19 +149,16 @@ export default function CreateEmployeePage() {
   });
 
   const selectedCompany = companies.find((c) => c._id === state.companyId);
-  const { restrictRoles, forceLOOnlyReceive, hideReceiveForAll } =
-    getCompanyPolicy(selectedCompany);
+const { roleMode, forceLOOnlyUpload, forceLOOnlyReceive } =
+  getCompanyPolicy(selectedCompany);
 
   // Roles visible in the dropdown
-  const roleOptions = useMemo(() => {
-    // base: only show "superadmin" option if current actor is superadmin
-    let list = isSuperadmin
-      ? BASE_ROLES
-      : BASE_ROLES.filter((r) => r.value !== "superadmin");
-    if (restrictRoles)
-      list = list.filter((r) => restrictRoles.includes(r.value));
-    return list;
-  }, [isSuperadmin, restrictRoles]);
+ const roleOptions = useMemo(() => {
+  return isSuperadmin
+    ? BASE_ROLES
+    : BASE_ROLES.filter((r) => r.value !== "superadmin");
+}, [isSuperadmin]);
+
 
   // Load companies (membership-scoped)
   useEffect(() => {
@@ -202,23 +192,30 @@ export default function CreateEmployeePage() {
   }, [state.role]);
 
   // Enforce company policy constraints whenever role or company changes
-  useEffect(() => {
-    setState((s) => {
-      let caps = { ...s.caps };
+  // REPLACE the whole enforcement effect with this:
+useEffect(() => {
+  setState((s) => {
+    let caps = { ...s.caps };
 
-      // Admin/Superadmin: ensure mgmt-only (upload/receive false)
-      if (s.role === "admin" || s.role === "superadmin") {
-        caps.canUploadLeads = false;
-        caps.canReceiveLeads = false;
-      }
+    // Admin/Superadmin: management-only; upload/receive always false
+    if (s.role === "admin" || s.role === "superadmin") {
+      caps.canUploadLeads = false;
+      caps.canReceiveLeads = false;
+    }
 
-      // Company A: hide receive for all -> force false
-      if (hideReceiveForAll) {
-        caps.canReceiveLeads = false;
-      }
-
-      // Company B + Lead Operator: only receive = true; others false
-      if (forceLOOnlyReceive && s.role === "lead_operator") {
+    // Lead Operator strict policies based on company roleMode
+    if (s.role === "lead_operator") {
+      if (forceLOOnlyUpload) {
+        // uploader company → ONLY upload=true (locked), others=false
+        caps = {
+          canUploadLeads: true,
+          canReceiveLeads: false,
+          can_distribute_leads: false,
+          can_distribute_fbids: false,
+          can_create_user: false,
+        };
+      } else if (forceLOOnlyReceive) {
+        // receiver company → ONLY receive=true (locked), others=false
         caps = {
           canUploadLeads: false,
           canReceiveLeads: true,
@@ -226,11 +223,16 @@ export default function CreateEmployeePage() {
           can_distribute_fbids: false,
           can_create_user: false,
         };
+      } else {
+        // hybrid → keep whatever role defaults set (no extra force here)
+        // (You already reset defaults in the "role change" effect)
       }
+    }
 
-      return { ...s, caps };
-    });
-  }, [state.role, state.companyId, hideReceiveForAll, forceLOOnlyReceive]);
+    return { ...s, caps };
+  });
+}, [state.role, state.companyId, forceLOOnlyUpload, forceLOOnlyReceive]);
+
 
   const [submitting, setSubmitting] = useState(false);
   const [toast, setToast] = useState<{
@@ -242,27 +244,32 @@ export default function CreateEmployeePage() {
     setState((s) => ({ ...s, [k]: v }));
   }
 
-  function setCap<K extends keyof Caps>(k: K, v: Caps[K]) {
-    // Lock out superadmin changes
-    if (state.role === "superadmin") return;
+ function setCap<K extends keyof Caps>(k: K, v: Caps[K]) {
+  // Superadmin role itself: immutable caps in UI
+  if (state.role === "superadmin") return;
 
-    // Admins: always false for upload/receive
-    if (
-      state.role === "admin" &&
-      (k === "canUploadLeads" || k === "canReceiveLeads")
-    )
-      return;
+  // Admin caps for upload/receive always false
+  if (
+    state.role === "admin" &&
+    (k === "canUploadLeads" || k === "canReceiveLeads")
+  )
+    return;
 
-    // Company A: never allow receive leads (hidden anyway)
-    if (hideReceiveForAll && k === "canReceiveLeads") return;
-
-    // Company B + Lead Operator: only allow receive=true; nothing else changeable
-    if (forceLOOnlyReceive && state.role === "lead_operator") {
+  // Lead operator lock by company roleMode
+  if (state.role === "lead_operator") {
+    if (forceLOOnlyUpload) {
+      // Only upload=true allowed; no other changes
+      if (!(k === "canUploadLeads" && v === true)) return;
+    }
+    if (forceLOOnlyReceive) {
+      // Only receive=true allowed; no other changes
       if (!(k === "canReceiveLeads" && v === true)) return;
     }
-
-    setState((s) => ({ ...s, caps: { ...s.caps, [k]: v } }));
   }
+
+  setState((s) => ({ ...s, caps: { ...s.caps, [k]: v } }));
+}
+
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -282,31 +289,43 @@ export default function CreateEmployeePage() {
     }
 
     // Final payload caps after policy enforcement (defense-in-depth)
-    const payloadCaps: Caps = (() => {
-      // Admin/Superadmin: upload/receive always false
-      if (state.role === "admin" || state.role === "superadmin") {
-        return {
-          ...state.caps,
-          canUploadLeads: false,
-          canReceiveLeads: false,
-        };
-      }
-      // Company A: receive false for all roles
-      if (hideReceiveForAll) {
-        return { ...state.caps, canReceiveLeads: false };
-      }
-      // Company B + LO: only receive true
-      if (forceLOOnlyReceive && state.role === "lead_operator") {
-        return {
-          canUploadLeads: false,
-          canReceiveLeads: true,
-          can_distribute_leads: false,
-          can_distribute_fbids: false,
-          can_create_user: false,
-        };
-      }
-      return state.caps;
-    })();
+   // REPLACE the payloadCaps IIFE with this:
+const payloadCaps: Caps = (() => {
+  // Admin/Superadmin: upload/receive always false
+  if (state.role === "admin" || state.role === "superadmin") {
+    return {
+      ...state.caps,
+      canUploadLeads: false,
+      canReceiveLeads: false,
+    };
+  }
+
+  // Lead Operator strict per company roleMode
+  if (state.role === "lead_operator") {
+    if (forceLOOnlyUpload) {
+      return {
+        canUploadLeads: true,
+        canReceiveLeads: false,
+        can_distribute_leads: false,
+        can_distribute_fbids: false,
+        can_create_user: false,
+      };
+    }
+    if (forceLOOnlyReceive) {
+      return {
+        canUploadLeads: false,
+        canReceiveLeads: true,
+        can_distribute_leads: false,
+        can_distribute_fbids: false,
+        can_create_user: false,
+      };
+    }
+  }
+
+  // Hybrid / other roles → whatever the UI has now
+  return state.caps;
+})();
+
 
     setSubmitting(true);
     try {
@@ -482,65 +501,60 @@ export default function CreateEmployeePage() {
         </Field>
 
         {/* Caps */}
-        <div className="rounded-xl border border-gray-200 dark:border-zinc-800 p-4">
-          <div className="text-sm font-medium mb-3">Permissions</div>
+      {/* Caps */}
+<div className="rounded-xl border border-gray-200 dark:border-zinc-800 p-4">
+  <div className="text-sm font-medium mb-3">Permissions</div>
 
-          {/* Company B + Lead Operator → only Receive (locked ON) */}
-          {forceLOOnlyReceive && state.role === "lead_operator" ? (
-            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              <Toggle
-                label="Can Receive Leads"
-                checked={true}
-                onChange={() => {}}
-                disabled
-              />
-              <div className="text-xs text-gray-500 col-span-full">
-                For Dataverse lead operators, only “Can Receive Leads” is
-                allowed.
-              </div>
-            </div>
-          ) : (
-            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {/* Upload/Receive hidden for admin/superadmin */}
-              {!(state.role === "superadmin" || state.role === "admin") && (
-                <>
-                  <Toggle
-                    label="Can Upload Leads"
-                    checked={state.caps.canUploadLeads}
-                    onChange={(v) => setCap("canUploadLeads", v)}
-                  />
-                  {/* Company A: hide Receive for all roles */}
-                  {!hideReceiveForAll && (
-                    <Toggle
-                      label="Can Receive Leads"
-                      checked={state.caps.canReceiveLeads}
-                      onChange={(v) => setCap("canReceiveLeads", v)}
-                    />
-                  )}
-                </>
-              )}
+  {/* Lead Operator strict modes */}
+  {state.role === "lead_operator" && (forceLOOnlyUpload || forceLOOnlyReceive) ? (
+    <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {forceLOOnlyUpload && (
+        <Toggle label="Can Upload Leads" checked={true} onChange={() => {}} disabled />
+      )}
+      {forceLOOnlyReceive && (
+        <Toggle label="Can Receive Leads" checked={true} onChange={() => {}} disabled />
+      )}
+      <div className="text-xs text-gray-500 col-span-full">
+        {forceLOOnlyUpload
+          ? "This company is an uploader-mode company — Lead Operators can only upload leads."
+          : "This company is a receiver-mode company — Lead Operators can only receive leads."}
+      </div>
+    </div>
+  ) : (
+    // Hybrid or non-LO roles → your normal grid
+    <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {/* Upload/Receive hidden for admin/superadmin */}
+      {!(state.role === "superadmin" || state.role === "admin") && (
+        <>
+          <Toggle
+            label="Can Upload Leads"
+            checked={state.caps.canUploadLeads}
+            onChange={(v) => setCap("canUploadLeads", v)}
+          />
+          <Toggle
+            label="Can Receive Leads"
+            checked={state.caps.canReceiveLeads}
+            onChange={(v) => setCap("canReceiveLeads", v)}
+          />
+        </>
+      )}
 
-              <Toggle
-                label="Can Distribute Leads"
-                checked={state.caps.can_distribute_leads}
-                onChange={(v) => setCap("can_distribute_leads", v)}
-                disabled={state.role === "superadmin"}
-              />
-              {/* <Toggle
-                label="Can Distribute FB IDs"
-                checked={state.caps.can_distribute_fbids}
-                onChange={(v) => setCap("can_distribute_fbids", v)}
-                disabled={state.role === "superadmin"}
-              /> */}
-              <Toggle
-                label="Can Create User"
-                checked={state.caps.can_create_user}
-                onChange={(v) => setCap("can_create_user", v)}
-                disabled={state.role === "superadmin"}
-              />
-            </div>
-          )}
-        </div>
+      <Toggle
+        label="Can Distribute Leads"
+        checked={state.caps.can_distribute_leads}
+        onChange={(v) => setCap("can_distribute_leads", v)}
+        disabled={state.role === "superadmin"}
+      />
+      <Toggle
+        label="Can Create User"
+        checked={state.caps.can_create_user}
+        onChange={(v) => setCap("can_create_user", v)}
+        disabled={state.role === "superadmin"}
+      />
+    </div>
+  )}
+</div>
+
 
         <div className="flex items-center justify-between pt-2">
           <div className="text-xs text-gray-500">
