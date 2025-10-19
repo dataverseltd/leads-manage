@@ -87,14 +87,7 @@ export default async function DashboardLayout({
 
       {/* Credit Footer */}
       <footer className="mt-10 border-t border-gray-200 dark:border-neutral-800 py-4 text-center text-xs text-gray-500 dark:text-gray-400">
-        © {new Date().getFullYear()} DataVerse Dashboard. Built with ❤️ by{" "}
-        <a
-          href="https://github.com/sabbir-offc"
-          target="_blank"
-          className="hover:text-blue-600 font-bold underline transition-colors hover:duration-500 hover:trans"
-        >
-          Sabbir Howlader
-        </a>
+        © {new Date().getFullYear()} DataVerse Dashboard. Built with ❤️
       </footer>
     </AppShell>
   );

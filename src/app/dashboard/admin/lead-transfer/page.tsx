@@ -30,7 +30,11 @@ type Company = {
 };
 
 type ApiError = { error?: string };
-type TransferResponse = { transferred?: number; success?: boolean; error?: string };
+type TransferResponse = {
+  transferred?: number;
+  success?: boolean;
+  error?: string;
+};
 
 export default function LeadTransferPage() {
   const { data: session } = useSession();
@@ -51,7 +55,9 @@ export default function LeadTransferPage() {
   const fetchCompanies = useCallback(async () => {
     try {
       setLoadingCompanies(true);
-      const res = await fetch(`/api/admin/companies?active=1&scope=memberships`);
+      const res = await fetch(
+        `/api/admin/companies?active=1&scope=memberships`
+      );
       const data: Company[] = await res.json();
       const receiver = data.filter((c) =>
         ["receiver", "hybrid"].includes(c.roleMode)
@@ -127,6 +133,7 @@ export default function LeadTransferPage() {
   useEffect(() => {
     if (companyId) fetchOperators(companyId);
   }, [companyId, fetchOperators]);
+  console.log("hello");
 
   /* ---------------- UI ---------------- */
   const fromOp = operators.find((o) => o._id === fromUser);
