@@ -27,14 +27,13 @@ export interface LeadType {
   createdAt?: Date; // from timestamps
   updatedAt?: Date; // from timestamps
 }
-
 const LeadSchema = new Schema<LeadType>(
   {
     fb_id_name: { type: String, trim: true },
     client_name: { type: String, trim: true },
 
-    // `unique: true` already creates an index. Do NOT add a separate schema.index({ number: 1 })
-    number: { type: String, unique: true, required: true, trim: true },
+    // ❌ Remove inline unique:true
+    number: { type: String, required: true, trim: true },
 
     rent: { type: String, trim: true },
     house_apt: { type: String, trim: true },
@@ -47,75 +46,43 @@ const LeadSchema = new Schema<LeadType>(
 
     lead_status: {
       type: String,
-      enum: ["pending", "assigned", "in_progress", "approved", "rejected"],
+      enum: ["pending", "assigned", "in_progress", "done", "rejected"],
       default: "pending",
-      index: true,
     },
 
-    submitted_by: {
-      type: Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-      index: true,
-    },
-    assigned_to: {
-      type: Schema.Types.ObjectId,
-      ref: "User",
-      default: null,
-      index: true,
-    },
+    submitted_by: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    assigned_to: { type: Schema.Types.ObjectId, ref: "User", default: null },
     assigned_at: { type: Date, default: null },
-
-    workingDay: { type: String, required: true, index: true },
-
-    // company fields
+    workingDay: { type: String, required: true },
     sourceCompanyId: {
       type: Schema.Types.ObjectId,
       ref: "Company",
       default: null,
-      index: true,
     },
     targetCompanyId: {
       type: Schema.Types.ObjectId,
       ref: "Company",
       default: null,
-      index: true,
     },
     assignedCompanyId: {
       type: Schema.Types.ObjectId,
       ref: "Company",
       default: null,
-      index: true,
     },
   },
-  {
-    timestamps: true,
-    collection: "leads",
-    // Avoid background index builds in prod hot paths; create via migrations instead.
-    autoIndex: process.env.NODE_ENV !== "production",
-  }
+  { timestamps: true, collection: "leads" }
 );
 
-/* ---------- Indexes (no duplicates) ---------- */
-
-// Helpful compounds for dashboards:
+/* ---- Indexes ---- */
+LeadSchema.index({ workingDay: 1 });
+LeadSchema.index({ createdAt: -1 });
 LeadSchema.index({ workingDay: 1, assignedCompanyId: 1 });
 LeadSchema.index({ assignedCompanyId: 1, lead_status: 1, workingDay: 1 });
+LeadSchema.index({ workingDay: 1, lead_status: 1, targetCompanyId: 1 });
+LeadSchema.index({ assigned_to: 1, lead_status: 1, targetCompanyId: 1 });
+LeadSchema.index({ targetCompanyId: 1, lead_status: 1 });
 
-// Fast filter + sort combos:
-LeadSchema.index({ assigned_to: 1, workingDay: -1, createdAt: -1 });
-LeadSchema.index({ workingDay: -1, createdAt: -1, assigned_to: 1 });
+// ✅ Main protection — same number cannot appear twice on same workingDay
+LeadSchema.index({ number: 1, workingDay: 1 }, { unique: true });
 
-// CreatedAt is useful for “latest first”
-LeadSchema.index({ createdAt: -1 });
-
-// Optional simple field helpers (these are fine; just don't duplicate `number`):
-LeadSchema.index({ address: 1 });
-LeadSchema.index({ fb_id_name: 1 });
-LeadSchema.index({ client_name: 1 });
-
-// ❌ DO NOT add: LeadSchema.index({ number: 1 })  ← would duplicate the unique index
-
-// Next.js-safe model export (prevents recompile warnings)
-const Lead = models.Lead || model<LeadType>("Lead", LeadSchema);
-export default Lead;
+export default mongoose.models.Lead || mongoose.model("Lead", LeadSchema);
