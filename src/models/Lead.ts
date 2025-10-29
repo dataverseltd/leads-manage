@@ -46,7 +46,7 @@ const LeadSchema = new Schema<LeadType>(
 
     lead_status: {
       type: String,
-      enum: ["pending", "assigned", "in_progress", "done", "rejected"],
+      enum: ["pending", "assigned", "in_progress", "approved", "rejected"],
       default: "pending",
     },
 
