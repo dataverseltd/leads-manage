@@ -15,7 +15,7 @@ export default function SignIn() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const brandName = process.env.NEXT_PUBLIC_BRAND;
-
+  const logo = process.env.NEXT_PUBLIC_LOGO || "/logo.png";
   // ✅ Prevent infinite refresh loop
   useEffect(() => {
     if (status === "authenticated") {
@@ -71,7 +71,7 @@ export default function SignIn() {
           <div className="hidden select-none md:flex md:flex-col md:justify-center">
             <div className="relative mx-auto h-20 w-20 animate-glow">
               <Image
-                src="/logo.png"
+                src={logo}
                 alt="Brand"
                 fill
                 priority
@@ -110,7 +110,7 @@ export default function SignIn() {
               <div className="flex items-center gap-3">
                 <div className="relative h-10 w-10">
                   <Image
-                    src="/logo.png"
+                    src={logo}
                     alt="Brand"
                     fill
                     className="object-contain"
