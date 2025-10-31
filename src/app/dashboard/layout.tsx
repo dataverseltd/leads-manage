@@ -83,7 +83,7 @@ export default async function DashboardLayout({
       myLeadsBadge={12}
       memberships={memberships}
     >
-      <div className="mx-auto container py-10">{children}</div>
+      <div className="mx-auto container py-4">{children}</div>
 
       {/* Credit Footer */}
       <footer className="mt-10 border-t border-gray-200 dark:border-neutral-800 py-4 text-center text-xs text-gray-500 dark:text-gray-400">

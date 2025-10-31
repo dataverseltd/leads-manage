@@ -1,4 +1,3 @@
-// src/lib/auth-options.ts
 import type { NextAuthOptions, DefaultSession } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import type { RequestInternal } from "next-auth";
@@ -32,53 +31,29 @@ interface MembershipDoc {
 interface MembershipView {
   companyId: string;
   companyCode?: string;
+  companyName?: string;
   role: MembershipDoc["role"];
   roleMode: RoleMode;
   active: boolean;
 
-  // raw caps from DB
   canUploadLeads_raw: boolean;
   canReceiveLeads_raw: boolean;
   can_distribute_leads: boolean;
   can_distribute_fbids: boolean;
   can_create_user: boolean;
 
-  // effective caps after company policy
   canUploadLeads: boolean;
   canReceiveLeads: boolean;
 }
 
-// --- add name to the lean type ---
 type CompanyLean = {
   _id: Types.ObjectId;
-  name?: string; // <-- NEW
+  name?: string;
   code?: string;
   roleMode?: RoleMode;
   active?: boolean;
 };
 
-// --- add companyName to the membership view returned to client ---
-interface MembershipView {
-  companyId: string;
-  companyCode?: string;
-  companyName?: string; // <-- NEW
-  role: MembershipDoc["role"];
-  roleMode: RoleMode;
-  active: boolean;
-
-  // raw caps from DB
-  canUploadLeads_raw: boolean;
-  canReceiveLeads_raw: boolean;
-  can_distribute_leads: boolean;
-  can_distribute_fbids: boolean;
-  can_create_user: boolean;
-
-  // effective caps after company policy
-  canUploadLeads: boolean;
-  canReceiveLeads: boolean;
-}
-
-/** Augment JWT token shape we store */
 type AugmentedToken = JWT & {
   userId?: string;
   sessionToken?: string;
@@ -96,7 +71,6 @@ type AugmentedToken = JWT & {
   };
 };
 
-/** Session we expose to client */
 type AppSession = DefaultSession & {
   userId?: string;
   role?: MembershipDoc["role"];
@@ -108,7 +82,6 @@ type AppSession = DefaultSession & {
   roleMode?: RoleMode;
 };
 
-/** User doc used in authorize() (non-lean so we can .save()) */
 type UserDocForAuthorize = {
   _id: Types.ObjectId;
   email: string;
@@ -123,7 +96,6 @@ type UserDocForAuthorize = {
   save: () => Promise<unknown>;
 };
 
-/** User shape used in jwt callback (lean) */
 type UserLeanForJwt = {
   _id: Types.ObjectId;
   memberships?: MembershipDoc[];
@@ -135,10 +107,9 @@ function applyCompanyModeCaps(
   m: { canUploadLeads: boolean; canReceiveLeads: boolean },
   mode: RoleMode
 ) {
-  // Company policy gates the user's membership caps
   const allows = {
-    uploadLeads: mode !== "receiver", // uploader/hybrid => true
-    receiveLeads: mode !== "uploader", // receiver/hybrid => true
+    uploadLeads: mode !== "receiver",
+    receiveLeads: mode !== "uploader",
   };
   return {
     canUploadLeads: m.canUploadLeads && allows.uploadLeads,
@@ -160,11 +131,16 @@ function headerString(
 export const authOptions: NextAuthOptions = {
   session: { strategy: "jwt" },
 
+  // ✅ Fix: disable JWT encryption so magic-link JWTs are read properly
+
+  // ✅ JWT configuration (no encryption flag needed in NextAuth v4+)
+  jwt: {
+    maxAge: 12 * 60 * 60, // optional: 12 hours same as your link expiry
+  },
   providers: [
     Credentials({
       name: "Credentials",
       credentials: { email: {}, password: {} },
-      // In NextAuth v4, `request` is RequestInternal; we only need headers.
       authorize: async (
         creds,
         request: Pick<RequestInternal, "headers"> & Partial<RequestInternal>
@@ -177,11 +153,27 @@ export const authOptions: NextAuthOptions = {
         const password = String(creds?.password || "");
         if (!email || !password) return null;
 
-        // Need full doc (non-lean) to save login history
-        const user = (await User.findOne({ email }).exec()) as
-          | (UserDocForAuthorize & Record<string, unknown>)
-          | null;
-        if (!user?.passwordHash) return null;
+        const user = await User.findOne({ email }).exec();
+
+        // type guard for null or wrong shape
+        if (!user || typeof user !== "object" || !("memberships" in user)) {
+          return null;
+        }
+
+        const typedUser = user as UserDocForAuthorize & {
+          memberships?: MembershipDoc[];
+        };
+
+        if (!typedUser.passwordHash) return null;
+
+        // ✅ Only allow password login for admins/superadmins
+        const roles = (typedUser.memberships || []).map((m) => m.role);
+
+        const isAdmin = roles.includes("admin") || roles.includes("superadmin");
+
+        if (!isAdmin) {
+          throw new Error("Secure link login required for this account.");
+        }
 
         const ok = await bcrypt.compare(password, user.passwordHash);
         if (!ok) return null;
@@ -195,20 +187,15 @@ export const authOptions: NextAuthOptions = {
             ? crypto.randomUUID()
             : `${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
-        try {
-          user.currentSessionToken = sessionToken;
-          user.isLoggedIn = true;
-          user.lastLoginAt = new Date();
-          user.lastKnownIP = ip;
-          user.lastUserAgent = ua;
-          user.loginHistory = user.loginHistory || [];
-          user.loginHistory.push({ ip, userAgent: ua, loggedInAt: new Date() });
-          await user.save();
-        } catch {
-          // ignore non-critical save failures
-        }
+        user.currentSessionToken = sessionToken;
+        user.isLoggedIn = true;
+        user.lastLoginAt = new Date();
+        user.lastKnownIP = ip;
+        user.lastUserAgent = ua;
+        user.loginHistory = user.loginHistory || [];
+        user.loginHistory.push({ ip, userAgent: ua, loggedInAt: new Date() });
+        await user.save();
 
-        // Minimal user payload; rest will be hydrated in jwt callback
         return {
           id: String(user._id),
           email: user.email,
@@ -220,38 +207,24 @@ export const authOptions: NextAuthOptions = {
   ],
 
   callbacks: {
-    /**
-     * JWT callback:
-     * - Hydrates memberships from DB
-     * - Fetches company roleMode for each membership
-     * - Intersects membership caps with company policy
-     * - Chooses activeCompanyId (persisted, or single membership, or first active)
-     * - Exposes caps, roleMode, activeCompanyCode on token
-     * - Supports client-side company switch via session.update({ activeCompanyId })
-     */
     async jwt({ token, user, trigger, session }) {
       const t = token as AugmentedToken;
 
       if (user) {
-        // `user` is what we returned from authorize()
         const u = user as { id?: string; sessionToken?: string };
         t.userId = u.id;
         t.sessionToken = u.sessionToken;
       }
 
-      // Allow switching active company from client via session.update({ activeCompanyId })
       if (trigger === "update" && session) {
         const s = session as Partial<AppSession>;
-        if (s.activeCompanyId) {
-          t.activeCompanyId = s.activeCompanyId;
-        }
+        if (s.activeCompanyId) t.activeCompanyId = s.activeCompanyId;
       }
 
       if (!t.userId) return t;
 
       await connectDB();
 
-      // Pull user + memberships (lean for perf)
       const dbUser = (await User.findById(t.userId)
         .select("memberships")
         .lean<UserLeanForJwt>()) as UserLeanForJwt | null;
@@ -260,7 +233,6 @@ export const authOptions: NextAuthOptions = {
         ? dbUser!.memberships!
         : [];
 
-      // Preload all companies for these memberships
       const companyIds = rawMemberships
         .map((m) => m.companyId)
         .filter((cid): cid is string => Boolean(cid));
@@ -275,16 +247,16 @@ export const authOptions: NextAuthOptions = {
         string,
         { roleMode: RoleMode; code?: string; name?: string; active?: boolean }
       >();
+
       for (const c of companies) {
         companyMap.set(String(c._id), {
           roleMode: c.roleMode ?? "hybrid",
           code: c.code,
-          name: c.name, // <-- store name
+          name: c.name,
           active: c.active,
         });
       }
 
-      // Build memberships with *effective* caps
       const memberships: MembershipView[] = rawMemberships.map((m) => {
         const cid = String(m.companyId);
         const comp = companyMap.get(cid);
@@ -301,17 +273,15 @@ export const authOptions: NextAuthOptions = {
         return {
           companyId: cid,
           companyCode: comp?.code ? String(comp.code).toLowerCase() : undefined,
-          companyName: comp?.name ?? undefined, // <-- expose name to client
+          companyName: comp?.name ?? undefined,
           role: m.role,
           roleMode: mode,
           active: comp?.active ?? true,
-
           canUploadLeads_raw: !!m.canUploadLeads,
           canReceiveLeads_raw: !!m.canReceiveLeads,
           can_distribute_leads: !!m.can_distribute_leads,
           can_distribute_fbids: !!m.can_distribute_fbids,
           can_create_user: !!m.can_create_user,
-
           canUploadLeads: intersect.canUploadLeads,
           canReceiveLeads: intersect.canReceiveLeads,
         };
@@ -319,7 +289,6 @@ export const authOptions: NextAuthOptions = {
 
       t.memberships = memberships;
 
-      // Determine active company
       let activeCompanyId: string | undefined = t.activeCompanyId;
       if (!activeCompanyId) {
         if (memberships.length === 1) {
@@ -332,10 +301,8 @@ export const authOptions: NextAuthOptions = {
       }
       t.activeCompanyId = activeCompanyId;
 
-      // Compute token-level caps/role data from the active membership
       const active = memberships.find((m) => m.companyId === activeCompanyId);
       if (active) {
-        // Use membership role as the primary "role"
         t.role = active.role;
         t.activeCompanyCode = active.companyCode || null;
         t.roleMode = active.roleMode || "hybrid";
@@ -347,7 +314,6 @@ export const authOptions: NextAuthOptions = {
           can_create_user: active.can_create_user,
         };
       } else {
-        // Fallback (no memberships)
         t.role = undefined;
         t.activeCompanyCode = null;
         t.roleMode = "hybrid";
@@ -363,10 +329,6 @@ export const authOptions: NextAuthOptions = {
       return t;
     },
 
-    /**
-     * Session callback:
-     * Mirrors JWT data into the session for client usage
-     */
     async session({ session, token }) {
       const t = token as AugmentedToken;
       const s = session as AppSession;
@@ -381,7 +343,6 @@ export const authOptions: NextAuthOptions = {
         can_create_user: false,
       };
       s.sessionToken = t.sessionToken;
-
       s.memberships = t.memberships ?? [];
       s.activeCompanyId = t.activeCompanyId ?? null;
       s.activeCompanyCode = t.activeCompanyCode ?? null;

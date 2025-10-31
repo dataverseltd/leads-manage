@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import Providers from "./providers";
 import { Toaster } from "react-hot-toast";
 import PushManager from "@/components/push/PushManager";
+import SessionValidator from "@/components/SessionValidator";
 
 export const metadata: Metadata = { title: "Lead & FB ID Portal" };
 
@@ -17,6 +18,7 @@ export default function RootLayout({
         <Providers>
           <div className="mx-auto">
             <PushManager />
+            <SessionValidator />
 
             {children}
             <Toaster position="top-center" />

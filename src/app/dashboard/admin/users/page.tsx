@@ -13,6 +13,8 @@ import {
   FiCheck,
   FiX,
 } from "react-icons/fi";
+import SecureLoginLinkModal from "@/components/admin/SecureLoginLinkModal";
+import { KeyRound } from "lucide-react";
 
 type MembershipView = {
   companyId: string;
@@ -89,8 +91,7 @@ export default function AdminUsersPage() {
     [session.memberships]
   );
 
-  const singleCompanyId =
-    companies.length === 1 ? companies[0].id : undefined;
+  const singleCompanyId = companies.length === 1 ? companies[0].id : undefined;
 
   const [companyId, setCompanyId] = useState<string>(
     singleCompanyId || companies[0]?.id || ""
@@ -99,6 +100,10 @@ export default function AdminUsersPage() {
   useEffect(() => {
     if (singleCompanyId) setCompanyId(singleCompanyId);
   }, [singleCompanyId]);
+  const [secureUser, setSecureUser] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
 
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -125,19 +130,20 @@ export default function AdminUsersPage() {
       if (search) qs.set("search", search);
       if (companyId) qs.set("companyId", companyId);
 
-     const resp = await fetch(`/api/users?${qs.toString()}`, { cache: "no-store" });
+      const resp = await fetch(`/api/users?${qs.toString()}`, {
+        cache: "no-store",
+      });
 
-const payload: unknown = await resp.json();
-if (!resp.ok) {
-  throw new Error(apiErrorOf(payload) ?? "Failed to load");
-}
+      const payload: unknown = await resp.json();
+      if (!resp.ok) {
+        throw new Error(apiErrorOf(payload) ?? "Failed to load");
+      }
 
-const list: UserRow[] = Array.isArray(payload)
-  ? (payload as UserRow[])
-  : ((payload as UsersEnvelope).users ?? []);
+      const list: UserRow[] = Array.isArray(payload)
+        ? (payload as UserRow[])
+        : (payload as UsersEnvelope).users ?? [];
 
-setUsers(list);
-
+      setUsers(list);
     } catch (e: unknown) {
       setError(getErrorMessage(e, "Failed to load"));
       setUsers([]);
@@ -154,11 +160,13 @@ setUsers(list);
     if (!deleteId) return;
     setDeleting(true);
     try {
-    const resp = await fetch(`/api/users?id=${deleteId}`, { method: "DELETE" });
-const payload: unknown = await resp.json().catch(() => ({}));
-if (!resp.ok) {
-  throw new Error(apiErrorOf(payload) ?? "Delete failed");
-}
+      const resp = await fetch(`/api/users?id=${deleteId}`, {
+        method: "DELETE",
+      });
+      const payload: unknown = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(apiErrorOf(payload) ?? "Delete failed");
+      }
 
       setDeleteId(null);
       await fetchUsers();
@@ -178,15 +186,15 @@ if (!resp.ok) {
     setPwdSaving(true);
     setPwdErr("");
     try {
-    const resp = await fetch(`/api/users?id=${pwdForId}`, {
-  method: "PATCH",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ password: newPassword }),
-});
-const payload: unknown = await resp.json().catch(() => ({}));
-if (!resp.ok) {
-  throw new Error(apiErrorOf(payload) ?? "Update failed");
-}
+      const resp = await fetch(`/api/users?id=${pwdForId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: newPassword }),
+      });
+      const payload: unknown = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(apiErrorOf(payload) ?? "Update failed");
+      }
 
       setPwdForId(null);
       setNewPassword("");
@@ -316,7 +324,32 @@ if (!resp.ok) {
                   </Td>
                   <Td>{u.lastKnownIP ? u.lastKnownIP : "—"}</Td>
                   <Td className="text-right">
-                    <div className="flex justify-end gap-2">
+                    <div className="flex justify-end gap-2 flex-wrap">
+                      {/* ✅ Secure Login Button — visible to superadmin/admin for limited roles */}
+                      {(session.role === "superadmin" ||
+                        session.role === "admin") &&
+                        u.memberships?.some((m) =>
+                          [
+                            "lead_operator",
+                            "fb_submitter",
+                            "fb_analytics_viewer",
+                          ].includes(m.role)
+                        ) && (
+                          <button
+                            onClick={() =>
+                              setSecureUser({
+                                id: u._id,
+                                name: u.name || "Unnamed",
+                              })
+                            }
+                            className="inline-flex items-center gap-1 rounded border border-indigo-300 dark:border-indigo-700 px-2 h-8 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/30"
+                            title="Generate secure login link"
+                          >
+                            <KeyRound size={14} /> Secure Login
+                          </button>
+                        )}
+
+                      {/* Password */}
                       <button
                         onClick={() => setPwdForId(u._id)}
                         className="inline-flex items-center gap-1 rounded border border-slate-300 dark:border-slate-700 px-2 h-8 text-slate-800 dark:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-800"
@@ -324,6 +357,8 @@ if (!resp.ok) {
                       >
                         <FiEdit3 /> Password
                       </button>
+
+                      {/* Delete */}
                       <button
                         onClick={() => setDeleteId(u._id)}
                         className="inline-flex items-center gap-1 rounded border border-red-300 dark:border-red-800 px-2 h-8 text-red-700 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/30"
@@ -401,6 +436,13 @@ if (!resp.ok) {
             </button>
           </div>
         </Modal>
+      )}
+      {secureUser && (
+        <SecureLoginLinkModal
+          userId={secureUser.id}
+          userName={secureUser.name}
+          onClose={() => setSecureUser(null)}
+        />
       )}
     </div>
   );
