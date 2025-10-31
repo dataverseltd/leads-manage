@@ -10,6 +10,7 @@ import Screenshot from "@/models/Screenshot";
 import CompanyMonthlyProduct from "@/models/CompanyMonthlyProduct";
 import Lead from "@/models/Lead";
 import Ably from "ably";
+import dayjs from "dayjs";
 
 /* ---------------- Types ---------------- */
 type AppSession = Session & { userId?: string | null };
@@ -121,10 +122,21 @@ export async function POST(req: NextRequest) {
     if (!productDoc) return err("Product not found", 404);
     if (productDoc.active === false) return err("Product is inactive", 400);
 
-    const monthFromDay = workingDay.slice(0, 7); // "YYYY-MM"
-    if (productDoc.month !== monthFromDay) {
+
+    const productMonth = productDoc.month;
+    const workingDate = dayjs(workingDay);
+    const productMonthStart = dayjs(productMonth + "-01");
+
+    // ✅ Allow previous month's last day (grace period)
+    if (
+      productMonth !== workingDay.slice(0, 7) &&
+      !workingDate.isSame(productMonthStart.subtract(1, "day"), "day")
+    ) {
       return err(
-        `Product belongs to ${productDoc.month}, but workingDay is ${monthFromDay}`,
+        `Product belongs to ${productMonth}, but workingDay is ${workingDay.slice(
+          0,
+          7
+        )}`,
         400
       );
     }
