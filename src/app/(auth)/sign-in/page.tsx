@@ -14,6 +14,7 @@ export default function SignIn() {
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+  const brandName = process.env.NEXT_PUBLIC_BRAND;
 
   // ✅ Prevent infinite refresh loop
   useEffect(() => {
@@ -78,7 +79,7 @@ export default function SignIn() {
               />
             </div>
             <h1 className="mt-6 text-3xl font-semibold tracking-tight">
-              Dataverse LTD
+              {brandName}
             </h1>
             <p className="mt-2 max-w-md text-sm opacity-80">
               Streamlined distribution, realtime screenshots, and single-device
@@ -185,7 +186,7 @@ export default function SignIn() {
             </div>
 
             <div className="pointer-events-none absolute -right-4 -top-4 select-none rounded-full bg-[#0F7A7A] px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-white shadow-lg backdrop-blur">
-              DataVerse
+              {brandName}
             </div>
           </div>
         </div>

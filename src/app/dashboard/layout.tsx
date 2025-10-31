@@ -55,6 +55,8 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const brandName = process.env.NEXT_PUBLIC_BRAND;
+
   const session = (await getServerSession(authOptions)) as CustomSession | null;
 
   const roleRaw: Role = (session?.role ?? "") as Role;
@@ -87,7 +89,7 @@ export default async function DashboardLayout({
 
       {/* Credit Footer */}
       <footer className="mt-10 border-t border-gray-200 dark:border-neutral-800 py-4 text-center text-xs text-gray-500 dark:text-gray-400">
-        © {new Date().getFullYear()} DataVerse Dashboard. Built with ❤️
+        © {new Date().getFullYear()} {brandName} Dashboard. Built with ❤️
       </footer>
     </AppShell>
   );
