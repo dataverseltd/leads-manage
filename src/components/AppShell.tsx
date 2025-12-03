@@ -25,6 +25,7 @@ import {
   Blocks,
   UsersIcon,
   Repeat,
+  ChartArea,
 } from "lucide-react";
 
 /* ---------- Types ---------- */
@@ -444,21 +445,32 @@ export function AppShell({
       sections.push({
         heading: "Overview",
         items: [
-          { label: "Dashboard", href: "/dashboard/uploader", icon: LayoutDashboard },
+          {
+            label: "Dashboard",
+            href: "/dashboard/uploader",
+            icon: LayoutDashboard,
+          },
           { label: "All Leads", href: "/dashboard/admin/leads", icon: Blocks },
+          {
+            label: "Performance",
+            href: "/dashboard/admin/uploader/employee/performance",
+            icon: ChartArea,
+          },
         ],
       });
 
-      adminItems.push({
-        label: "Employees / New",
-        href: "/dashboard/admin/employees/new",
-        icon: UserPlus,
-      },
-     {
-        label: "Manage Users",
-        href: "/dashboard/admin/users",
-        icon: UsersIcon,
-      });
+      adminItems.push(
+        {
+          label: "Employees / New",
+          href: "/dashboard/admin/employees/new",
+          icon: UserPlus,
+        },
+        {
+          label: "Manage Users",
+          href: "/dashboard/admin/users",
+          icon: UsersIcon,
+        }
+      );
 
       if (adminItems.length) {
         sections.push({ heading: "Admin", items: adminItems });
@@ -539,21 +551,32 @@ export function AppShell({
       sections.push({
         heading: "Overview",
         items: [
-          { label: "Dashboard", href: "/dashboard/uploader", icon: LayoutDashboard },
+          {
+            label: "Dashboard",
+            href: "/dashboard/uploader",
+            icon: LayoutDashboard,
+          },
           { label: "All Leads", href: "/dashboard/admin/leads", icon: Blocks },
+          {
+            label: "Performance",
+            href: "/dashboard/admin/uploader/employee/performance",
+            icon: ChartArea,
+          },
         ],
       });
 
-      adminItems.push({
-        label: "Employees / New",
-        href: "/dashboard/admin/employees/new",
-        icon: UserPlus,
-      },
-     {
-        label: "Manage Users",
-        href: "/dashboard/admin/users",
-        icon: UsersIcon,
-      });
+      adminItems.push(
+        {
+          label: "Employees / New",
+          href: "/dashboard/admin/employees/new",
+          icon: UserPlus,
+        },
+        {
+          label: "Manage Users",
+          href: "/dashboard/admin/users",
+          icon: UsersIcon,
+        }
+      );
 
       if (adminItems.length) {
         sections.push({ heading: "Admin", items: adminItems });

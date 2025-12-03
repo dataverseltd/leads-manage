@@ -58,12 +58,17 @@ type ExtendedUser = Session["user"] & {
 };
 type MySession = Session & { user?: ExtendedUser };
 
-
-const STATUS_ORDER = ["approved", "in_progress", "assigned", "pending", "rejected"] as const;
+const STATUS_ORDER = [
+  "approved",
+  "in_progress",
+  "assigned",
+  "pending",
+  "rejected",
+] as const;
 
 export default function UploaderDashboardPage() {
   const { data } = useSession(); // no generic here
-    const session = (data || {}) as MySession;
+  const session = (data || {}) as MySession;
 
   const [leaders, setLeaders] = useState<Leader[]>([]);
   const [availableStatuses, setAvailableStatuses] = useState<string[]>([]);
@@ -72,28 +77,65 @@ export default function UploaderDashboardPage() {
 
   const [range, setRange] = useState<Range>("month");
   const [periodLabel, setPeriodLabel] = useState<string>("");
-  const [selectedMonth, setSelectedMonth] = useState<string>(dayjs().format("YYYY-MM"));
+  const [selectedMonth, setSelectedMonth] = useState<string>(
+    dayjs().format("YYYY-MM")
+  );
 
   // Filters & UX
   const [activeStatuses, setActiveStatuses] = useState<string[]>([]); // empty = all
   const [query, setQuery] = useState("");
   const [density, setDensity] = useState<"normal" | "compact">("normal");
 
+  // 👇 NEW STATE
+  const [myCompanies, setMyCompanies] = useState<
+    { _id: string; name: string }[]
+  >([]);
+  const [companyId, setCompanyId] = useState<string>("");
+
   // highlight current user (no any)
   const currentEmployeeId =
     session.user?.employee_id ?? session.user?.employeeId ?? "";
 
+  // 👇 Load memberships FIRST
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const resp = await fetch("/api/admin/companies?scope=memberships");
+        if (!resp.ok) return;
+
+        const data = await resp.json();
+        setMyCompanies(data || []);
+
+        // Auto-select if only one company
+        if (data?.length === 1) {
+          setCompanyId(data[0]._id);
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    };
+
+    load();
+  }, []);
+
+  // 👇 Fetch leaderboard (but ONLY after companyId is ready)
   const fetchLeaders = useCallback(async () => {
+    if (myCompanies.length === 0) return; // not yet loaded memberships
+    if (myCompanies.length === 1 && !companyId) return; // wait for auto-select
+
     setLoading(true);
     setFetchError("");
 
     const qs = new URLSearchParams({ range });
+
     if (range === "month" && selectedMonth) qs.set("month", selectedMonth);
+    if (companyId) qs.set("companyId", companyId);
 
     try {
       const res = await fetch(`/api/uploader/leaderboard?${qs.toString()}`, {
         cache: "no-store",
       });
+
       if (!res.ok) {
         setLeaders([]);
         setAvailableStatuses([]);
@@ -102,7 +144,9 @@ export default function UploaderDashboardPage() {
         setLoading(false);
         return;
       }
+
       const data: ApiResponse = await res.json();
+
       setLeaders(data.leaders || []);
       setAvailableStatuses(data.availableStatuses || []);
       setPeriodLabel(data.period || "");
@@ -114,11 +158,12 @@ export default function UploaderDashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, [range, selectedMonth]);
+  }, [range, selectedMonth, companyId, myCompanies]);
 
+  // 👇 Re-run leaderboard whenever range, month, or company changes
   useEffect(() => {
     fetchLeaders();
-  }, [range, selectedMonth, fetchLeaders]);
+  }, [range, selectedMonth, companyId, myCompanies, fetchLeaders]);
 
   // Derived
   const maxTotal = useMemo(
@@ -134,9 +179,11 @@ export default function UploaderDashboardPage() {
         !q ||
         l.name?.toLowerCase().includes(q) ||
         l.employee_id?.toLowerCase().includes(q);
+
       const statusHit =
         activeStatuses.length === 0 ||
         activeStatuses.some((s) => (l.statuses?.[s] ?? 0) > 0);
+
       return nameHit && statusHit;
     });
   }, [leaders, query, activeStatuses]);
@@ -178,7 +225,9 @@ export default function UploaderDashboardPage() {
     return map;
   }, [availableStatuses]);
 
-  const showStatuses = (activeStatuses.length ? activeStatuses : availableStatuses).filter(Boolean);
+  const showStatuses = (
+    activeStatuses.length ? activeStatuses : availableStatuses
+  ).filter(Boolean);
   const stackedDatasets = showStatuses.map((status) => ({
     label: status,
     data: top10.map((l) => Number(l.statuses?.[status] || 0)),
@@ -219,7 +268,8 @@ export default function UploaderDashboardPage() {
   function getCssVar(name: string) {
     if (typeof window === "undefined") return undefined;
     return (
-      getComputedStyle(document.documentElement).getPropertyValue(name) || undefined
+      getComputedStyle(document.documentElement).getPropertyValue(name) ||
+      undefined
     );
   }
 
@@ -245,13 +295,15 @@ export default function UploaderDashboardPage() {
     );
   };
 
-  const myIndex = filtered.findIndex((u) => u.employee_id === currentEmployeeId);
+  const myIndex = filtered.findIndex(
+    (u) => u.employee_id === currentEmployeeId
+  );
   const tableRef = useRef<HTMLTableElement | null>(null);
   const jumpToMe = () => {
     if (myIndex < 0 || !tableRef.current) return;
-    const row = tableRef.current.querySelectorAll("tbody tr")[
-      myIndex
-    ] as HTMLElement | undefined;
+    const row = tableRef.current.querySelectorAll("tbody tr")[myIndex] as
+      | HTMLElement
+      | undefined;
     row?.scrollIntoView({ behavior: "smooth", block: "center" });
     row?.classList.add("ring-2", "ring-emerald-400");
     setTimeout(() => row?.classList.remove("ring-2", "ring-emerald-400"), 1200);
@@ -292,6 +344,29 @@ export default function UploaderDashboardPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {myCompanies.length > 1 && (
+              <select
+                value={companyId}
+                onChange={(e) => setCompanyId(e.target.value)}
+                className="h-9 rounded-md border border-slate-300 dark:border-slate-700 
+    bg-white dark:bg-slate-900 px-3 text-sm text-slate-900 dark:text-slate-100"
+              >
+                {myCompanies.map((c) => (
+                  <option key={c._id} value={c._id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            {myCompanies.length === 1 && (
+              <span
+                className="text-xs px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-900/20 
+    text-blue-700 dark:text-blue-300"
+              >
+                {myCompanies[0].name}
+              </span>
+            )}
+
             {/* Range */}
             <div className="flex items-center gap-2">
               <label className="sr-only" htmlFor="range">
@@ -416,13 +491,18 @@ export default function UploaderDashboardPage() {
 
         {/* Status chips */}
         <div className="mt-3 flex flex-wrap gap-2">
-          {(availableStatuses.length ? availableStatuses : Array.from(STATUS_ORDER)).map((s) => {
+          {(availableStatuses.length
+            ? availableStatuses
+            : Array.from(STATUS_ORDER)
+          ).map((s) => {
             const on = activeStatuses.includes(s);
             return (
               <button
                 key={s}
                 onClick={() =>
-                  setActiveStatuses((prev) => (on ? prev.filter((x) => x !== s) : [...prev, s]))
+                  setActiveStatuses((prev) =>
+                    on ? prev.filter((x) => x !== s) : [...prev, s]
+                  )
                 }
                 className={`px-3 h-8 rounded-full text-sm border transition
                 ${
@@ -471,7 +551,9 @@ export default function UploaderDashboardPage() {
               </button>
             </span>
           ) : (
-            <span className="opacity-70">You are not in this list for current filters.</span>
+            <span className="opacity-70">
+              You are not in this list for current filters.
+            </span>
           )}
         </div>
       </div>
@@ -482,7 +564,11 @@ export default function UploaderDashboardPage() {
           Top 10 Uploaders (Stacked by Status)
         </h2>
         <div className="h-72">
-          {loading ? <ChartSkeleton /> : <Bar data={chartData} options={chartOptions} />}
+          {loading ? (
+            <ChartSkeleton />
+          ) : (
+            <Bar data={chartData} options={chartOptions} />
+          )}
         </div>
       </div>
 
@@ -499,8 +585,12 @@ export default function UploaderDashboardPage() {
               </div>
             ) : (
               <div>
-                <p className="font-medium mb-1">No uploads match your filters.</p>
-                <p className="text-sm opacity-80">Try clearing search or status chips.</p>
+                <p className="font-medium mb-1">
+                  No uploads match your filters.
+                </p>
+                <p className="text-sm opacity-80">
+                  Try clearing search or status chips.
+                </p>
               </div>
             )}
           </div>
@@ -531,7 +621,11 @@ export default function UploaderDashboardPage() {
                       layout
                       initial={{ opacity: 0, scale: 0.98 }}
                       animate={{ opacity: 1, scale: 1 }}
-                      transition={{ type: "spring", stiffness: 300, damping: 22 }}
+                      transition={{
+                        type: "spring",
+                        stiffness: 300,
+                        damping: 22,
+                      }}
                       className={`border-t border-slate-200 dark:border-slate-800 transition
                         ${
                           isCurrent
@@ -548,7 +642,7 @@ export default function UploaderDashboardPage() {
 
                       <Td className={rowPad}>
                         <Link
-                          href={`/dashboard/admin/employee/${u.employee_id}`}
+                          href={`/dashboard/admin/uploader/employee/${u.employee_id}?companyId=${companyId}`}
                           className="text-blue-700 dark:text-blue-400 hover:underline"
                         >
                           {u.name || u.employee_id}
@@ -565,7 +659,9 @@ export default function UploaderDashboardPage() {
                         </Td>
                       ))}
 
-                      <Td className={`${rowPad} font-semibold text-blue-700 dark:text-blue-300`}>
+                      <Td
+                        className={`${rowPad} font-semibold text-blue-700 dark:text-blue-300`}
+                      >
                         {u.totalLeads}
                       </Td>
                       <Td className={rowPad}>{percent}%</Td>
@@ -635,16 +731,24 @@ function Stat({
 }
 
 function ChartSkeleton() {
-  return <div className="h-full w-full animate-pulse rounded-md bg-slate-200/60 dark:bg-slate-800/60" />;
+  return (
+    <div className="h-full w-full animate-pulse rounded-md bg-slate-200/60 dark:bg-slate-800/60" />
+  );
 }
 
 function TableSkeleton() {
   return (
     <div className="divide-y divide-slate-200 dark:divide-slate-800">
       {Array.from({ length: 8 }).map((_, i) => (
-        <div key={i} className="grid grid-cols-8 md:grid-cols-12 gap-3 px-4 py-3">
+        <div
+          key={i}
+          className="grid grid-cols-8 md:grid-cols-12 gap-3 px-4 py-3"
+        >
           {Array.from({ length: 12 }).map((__, j) => (
-            <div key={j} className="h-4 rounded bg-slate-200/70 dark:bg-slate-800/70" />
+            <div
+              key={j}
+              className="h-4 rounded bg-slate-200/70 dark:bg-slate-800/70"
+            />
           ))}
         </div>
       ))}

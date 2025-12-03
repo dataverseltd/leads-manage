@@ -1,4 +1,4 @@
-// D:\DataVerse\lead-suite\apps\web\src\app\api\admin\screenshots\route.ts
+// D:\DataVerse LTD\lead-suite\apps\web\src\app\api\admin\screenshots\route.ts
 export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
@@ -34,7 +34,7 @@ type CustomSession = Session & {
   sessionToken?: string | null;
 };
 
-/** Helper to fetch a value from either session root or session.user */
+/** Helper to safely read values from session or session.user */
 function getSessionValue(
   session: CustomSession | null,
   keys: Array<keyof CustomSession | `user.${keyof SessionUserExtras}`>
@@ -60,30 +60,36 @@ export async function GET(req: NextRequest) {
     const session = (await getServerSession(
       authOptions
     )) as CustomSession | null;
+
     if (!session) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Build target URL (pass-through query: workingDay, status, q, limit, etc.)
+    // Build target URL
     const url = new URL(req.url);
-    const qs = url.search; // includes leading "?" or "" if none
+    const qs = url.search;
     const target = `${SERVER_API}/api/admin/screenshots${qs || ""}`;
 
-    // Safely read headers from session with fallbacks
+    // Extract all needed values from session
     const xUserId = getSessionValue(session, ["userId", "user.id"]);
     const xCompanyId = getSessionValue(session, [
       "activeCompanyId",
       "user.activeCompanyId",
     ]);
     const xRole = getSessionValue(session, ["role", "user.role"]);
+    const xSessionToken = getSessionValue(session, [
+      "sessionToken",
+      "user.sessionToken",
+    ]);
 
+    // MAIN FIX — include x-session-token
     const r = await fetch(target, {
       headers: {
+        "x-session-token": xSessionToken,
         "x-user-id": xUserId,
         "x-company-id": xCompanyId,
         "x-role": xRole,
       },
-      // credentials: "include", // uncomment if your upstream needs cookies
     });
 
     const text = await r.text();
