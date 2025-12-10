@@ -23,7 +23,7 @@
     "lodash.debounce": "^4.0.8",
     "lucide-react": "^0.543.0",
     "mongoose": "^8.18.1",
-    "next": "15.5.2",
+    "next": "15.5.7",
     "next-auth": "^4.24.11",
     "papaparse": "^5.5.3",
     "react": "19.1.0",
