@@ -242,6 +242,11 @@ export default function LeadSubmitPage() {
 
         <form
           onSubmit={onSubmit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+            }
+          }}
           className="grid grid-cols-1 md:grid-cols-2 gap-4"
         >
           {/* FB ID Name with suggestions */}
