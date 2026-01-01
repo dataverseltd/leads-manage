@@ -321,22 +321,49 @@ export default function DistributionAdminPage() {
       );
       return;
     }
+
     const target = !isActive;
+
+    // optimistic UI
     setIsActive(target);
+
     try {
       const res = await toggleTodayDistribution(target, companyId);
+
+      // ✅ Auto-paused: force UI to paused + refresh
+      if (res.paused) {
+        setIsActive(false);
+
+        toast.error(
+          res.reason === "daily_cap_reached"
+            ? "Auto-paused: daily cap reached for all eligible receivers."
+            : res.reason === "max_concurrent_reached"
+            ? "Auto-paused: all receivers are at max concurrent load."
+            : res.reason === "no_receivers"
+            ? "Auto-paused: no receivers configured for this company."
+            : "Auto-paused: no eligible receivers available."
+        );
+
+        await refetch();
+        return;
+      }
+
+      // Normal success paths
       if (res.switched === "on") {
         toast.success(
           `Distribution started for ${res.workingDay}. Drained ${
             res.drained ?? 0
           } pending.`
         );
-        await refetch();
       } else {
         toast.success(`Distribution paused for ${res.workingDay}.`);
       }
+
+      await refetch();
     } catch (e: unknown) {
-      setIsActive(!target);
+      // revert optimistic UI
+      setIsActive((prev) => !prev);
+
       const msg = e instanceof Error ? e.message : "Toggle failed";
       toast.error(msg);
     }

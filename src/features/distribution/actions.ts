@@ -1,20 +1,63 @@
-// ./src/features/distribution/actions.ts
-export type ToggleResponseBase = {
-  ok?: boolean;
-  switched?: "on" | "off";
+// apps/web/src/features/distribution/actions.ts
+
+export type PauseReason =
+  | "no_receivers"
+  | "no_eligible_receivers"
+  | "daily_cap_reached"
+  | "max_concurrent_reached";
+
+export type ToggleResponse = {
+  ok: boolean;
+  switched: "on" | "off";
+  workingDay: string;
+
   drained?: number;
-  workingDay?: string;
+
+  // ✅ new fields from assignBatch
+  paused?: boolean;
+  reason?: PauseReason;
+
+  // error field may appear in some server cases
   error?: string;
 };
 
-// Allow extra server fields, but type them safely:
-export type ToggleResponse = ToggleResponseBase & Record<string, unknown>;
+function isObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function pickString(v: unknown): string | undefined {
+  return typeof v === "string" ? v : undefined;
+}
+function pickNumber(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+function pickBool(v: unknown): boolean | undefined {
+  return typeof v === "boolean" ? v : undefined;
+}
+
+function parseToggleResponse(data: unknown): ToggleResponse {
+  const o = isObject(data) ? data : {};
+
+  // hard-required fields (with safe fallbacks)
+  const ok = pickBool(o.ok) ?? true;
+  const switched = (pickString(o.switched) as "on" | "off") ?? "off";
+  const workingDay = pickString(o.workingDay) ?? "";
+
+  const paused = pickBool(o.paused);
+  const reason = pickString(o.reason) as PauseReason | undefined;
+
+  const drained = pickNumber(o.drained);
+  const error = pickString(o.error);
+
+  return { ok, switched, workingDay, drained, paused, reason, error };
+}
 
 export async function toggleTodayDistribution(
   active: boolean,
   companyId?: string
 ): Promise<ToggleResponse> {
   const qs = companyId ? `?companyId=${encodeURIComponent(companyId)}` : "";
+
   const res = await fetch(`/api/admin/distribution/today/toggle${qs}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -22,7 +65,7 @@ export async function toggleTodayDistribution(
     body: JSON.stringify({ active }), // server expects { active }
   });
 
-  let data: unknown;
+  let data: unknown = undefined;
   try {
     data = await res.json();
   } catch {
@@ -31,15 +74,10 @@ export async function toggleTodayDistribution(
 
   if (!res.ok) {
     const msg =
-      (data && typeof data === "object" && "error" in data
-        ? (data as { error?: string }).error
-        : undefined) || "Failed to toggle distribution";
+      (isObject(data) && pickString(data.error)) ||
+      "Failed to toggle distribution";
     throw new Error(msg);
   }
 
-  // If the parsed JSON isn't an object, coerce to a minimal shape
-  const obj =
-    data && typeof data === "object" ? (data as Record<string, unknown>) : {};
-
-  return obj as ToggleResponse;
+  return parseToggleResponse(data);
 }
